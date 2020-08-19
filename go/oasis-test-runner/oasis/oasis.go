@@ -19,9 +19,11 @@ import (
 
 	"github.com/spf13/viper"
 
+	beacon "github.com/oasisprotocol/oasis-core/go/beacon/api"
 	"github.com/oasisprotocol/oasis-core/go/common/crypto/drbg"
 	"github.com/oasisprotocol/oasis-core/go/common/crypto/signature"
 	fileSigner "github.com/oasisprotocol/oasis-core/go/common/crypto/signature/signers/file"
+	memorySigner "github.com/oasisprotocol/oasis-core/go/common/crypto/signature/signers/memory"
 	"github.com/oasisprotocol/oasis-core/go/common/identity"
 	"github.com/oasisprotocol/oasis-core/go/common/logging"
 	"github.com/oasisprotocol/oasis-core/go/common/node"
@@ -46,10 +48,17 @@ const (
 	validatorStartDelay = 3 * time.Second
 
 	defaultConsensusBackend            = "tendermint"
-	defaultConsensusTimeoutCommit      = 250 * time.Millisecond
 	defaultEpochtimeTendermintInterval = 30
 	defaultInitialHeight               = 1
 	defaultHaltEpoch                   = math.MaxUint64
+
+	defaultConsensusTimeoutCommit = 1 * time.Second
+	defaultSCRAPEParticipants     = 3
+	defaultSCRAPEThreshold        = 2
+	defaultSCRAPEPVSSThreshold    = 2
+	defaultSCRAPECommitInterval   = 15
+	defaultSCRAPERevealInterval   = 10
+	defaultSCRAPETransitionDelay  = 4
 
 	logNodeFile        = "node.log"
 	logConsoleFile     = "console.log"
@@ -306,11 +315,8 @@ type NetworkCfg struct { // nolint: maligned
 	// HaltEpoch is the halt epoch height flag.
 	HaltEpoch uint64 `json:"halt_epoch"`
 
-	// EpochtimeMock is the mock epochtime flag.
-	EpochtimeMock bool `json:"epochtime_mock"`
-
-	// EpochtimeTendermintInterval is the tendermint epochtime block interval.
-	EpochtimeTendermintInterval int64 `json:"epochtime_tendermint_interval"`
+	// Beacon is the network-wide beacon parameters.
+	Beacon beacon.ConsensusParameters `json:"beacon"`
 
 	// DeterministicIdentities is the deterministic identities flag.
 	DeterministicIdentities bool `json:"deterministic_identities"`
@@ -332,6 +338,14 @@ type NetworkCfg struct { // nolint: maligned
 	// UseShortGrpcSocketPaths specifies whether nodes should use internal.sock in datadir or
 	// externally-provided.
 	UseShortGrpcSocketPaths bool `json:"-"`
+}
+
+// SetMockEpoch force-enables the mock epoch time keeping.
+func (cfg *NetworkCfg) SetMockEpoch() {
+	cfg.Beacon.DebugMockBackend = true
+	if cfg.Beacon.InsecureParameters != nil {
+		cfg.Beacon.InsecureParameters.Interval = defaultEpochtimeTendermintInterval
+	}
 }
 
 // Config returns the network configuration.
@@ -732,26 +746,8 @@ func (net *Network) runNodeBinary(consoleWriter io.Writer, args ...string) error
 }
 
 func (net *Network) generateDeterministicIdentity(dir *env.Dir, rawSeed string, roles []signature.SignerRole) error {
-	h := crypto.SHA512.New()
-	_, _ = h.Write([]byte(rawSeed))
-	seed := h.Sum(nil)
-
-	rng, err := drbg.New(crypto.SHA512, seed, nil, []byte("deterministic node identities test"))
-	if err != nil {
-		return err
-	}
-
-	for _, role := range roles {
-		factory, err := fileSigner.NewFactory(dir.String(), role)
-		if err != nil {
-			return err
-		}
-		if _, err = factory.Generate(role, rng); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	_, err := GenerateDeterministicNodeKeys(dir, rawSeed, roles)
+	return err
 }
 
 func (net *Network) generateDeterministicNodeIdentity(dir *env.Dir, rawSeed string) error {
@@ -760,6 +756,42 @@ func (net *Network) generateDeterministicNodeIdentity(dir *env.Dir, rawSeed stri
 		signature.SignerP2P,
 		signature.SignerConsensus,
 	})
+}
+
+// GenerateDeterministicNodeKeys generates and returns deterministic node keys.
+func GenerateDeterministicNodeKeys(dir *env.Dir, rawSeed string, roles []signature.SignerRole) ([]signature.PublicKey, error) {
+	h := crypto.SHA512.New()
+	_, _ = h.Write([]byte(rawSeed))
+	seed := h.Sum(nil)
+
+	rng, err := drbg.New(crypto.SHA512, seed, nil, []byte("deterministic node identities test"))
+	if err != nil {
+		return nil, err
+	}
+
+	var dirStr string
+	factoryCtor := func(args interface{}, roles ...signature.SignerRole) (signature.SignerFactory, error) {
+		return memorySigner.NewFactory(), nil
+	}
+	if dir != nil {
+		factoryCtor = fileSigner.NewFactory
+		dirStr = dir.String()
+	}
+
+	var pks []signature.PublicKey
+	for _, role := range roles {
+		factory, err := factoryCtor(dirStr, role)
+		if err != nil {
+			return nil, err
+		}
+		signer, err := factory.Generate(role, rng)
+		if err != nil {
+			return nil, err
+		}
+		pks = append(pks, signer.Public())
+	}
+
+	return pks, nil
 }
 
 // generateTempSocketPath returns a unique filename for a node's internal socket in the test base dir
@@ -874,7 +906,6 @@ func (net *Network) MakeGenesis() error {
 		"--initial_height", strconv.FormatInt(net.cfg.InitialHeight, 10),
 		"--halt.epoch", strconv.FormatUint(net.cfg.HaltEpoch, 10),
 		"--consensus.backend", net.cfg.Consensus.Backend,
-		"--epochtime.tendermint.interval", strconv.FormatInt(net.cfg.EpochtimeTendermintInterval, 10),
 		"--consensus.tendermint.timeout_commit", net.cfg.Consensus.Parameters.TimeoutCommit.String(),
 		"--registry.debug.allow_unroutable_addresses", "true",
 		"--" + genesis.CfgRegistryDebugAllowTestRuntimes, "true",
@@ -885,12 +916,37 @@ func (net *Network) MakeGenesis() error {
 		"--" + genesis.CfgStakingTokenSymbol, genesisTestHelpers.TestStakingTokenSymbol,
 		"--" + genesis.CfgStakingTokenValueExponent, strconv.FormatUint(
 			uint64(genesisTestHelpers.TestStakingTokenValueExponent), 10),
+		"--" + genesis.CfgBeaconBackend, net.cfg.Beacon.Backend,
 	}
-	if net.cfg.EpochtimeMock {
-		args = append(args, "--epochtime.debug.mock_backend")
+	switch net.cfg.Beacon.Backend {
+	case beacon.BackendInsecure:
+		args = append(args, []string{
+			"--" + genesis.CfgBeaconInsecureTendermintInterval, strconv.FormatInt(net.cfg.Beacon.InsecureParameters.Interval, 10),
+		}...)
+	case beacon.BackendSCRAPE:
+		args = append(args, []string{
+			"--" + genesis.CfgBeaconSCRAPEParticipants, strconv.FormatUint(net.cfg.Beacon.SCRAPEParameters.Participants, 10),
+			"--" + genesis.CfgBeaconSCRAPEThreshold, strconv.FormatUint(net.cfg.Beacon.SCRAPEParameters.Threshold, 10),
+			"--" + genesis.CfgBeaconSCRAPEPVSSThreshold, strconv.FormatUint(net.cfg.Beacon.SCRAPEParameters.PVSSThreshold, 10),
+			"--" + genesis.CfgBeaconSCRAPECommitInterval, strconv.FormatInt(net.cfg.Beacon.SCRAPEParameters.CommitInterval, 10),
+			"--" + genesis.CfgBeaconSCRAPERevealInterval, strconv.FormatInt(net.cfg.Beacon.SCRAPEParameters.RevealInterval, 10),
+			"--" + genesis.CfgBeaconSCRAPETransitionDelay, strconv.FormatInt(net.cfg.Beacon.SCRAPEParameters.TransitionDelay, 10),
+		}...)
+		if pks := net.cfg.Beacon.SCRAPEParameters.DebugForcedParticipants; len(pks) > 0 {
+			for _, pk := range pks {
+				args = append(args, []string{
+					"--" + genesis.CfgBeaconSCRAPEDebugForcedParticipant, pk.String(),
+				}...)
+			}
+		}
+	default:
+		return fmt.Errorf("oasis: unsupported beacon backend: %s", net.cfg.Beacon.Backend)
 	}
-	if net.cfg.DeterministicIdentities {
-		args = append(args, "--beacon.debug.deterministic")
+	if net.cfg.Beacon.DebugMockBackend {
+		args = append(args, "--"+genesis.CfgBeaconDebugMockBackend)
+	}
+	if net.cfg.Beacon.DebugDeterministic || net.cfg.DeterministicIdentities {
+		args = append(args, "--"+genesis.CfgBeaconDebugDeterministic)
 	}
 	for _, v := range net.entities {
 		args = append(args, v.toGenesisDescriptorArgs()...)
@@ -1042,8 +1098,39 @@ func New(env *env.Env, cfg *NetworkCfg) (*Network, error) {
 	if cfgCopy.Consensus.Parameters.GasCosts == nil {
 		cfgCopy.Consensus.Parameters.GasCosts = make(transaction.Costs)
 	}
-	if cfgCopy.EpochtimeTendermintInterval == 0 {
-		cfgCopy.EpochtimeTendermintInterval = defaultEpochtimeTendermintInterval
+	if cfgCopy.Beacon.Backend == "" {
+		cfgCopy.Beacon.Backend = beacon.BackendSCRAPE
+	}
+	switch cfgCopy.Beacon.Backend {
+	case beacon.BackendInsecure:
+		if cfgCopy.Beacon.InsecureParameters == nil {
+			cfgCopy.Beacon.InsecureParameters = new(beacon.InsecureParameters)
+		}
+		if cfgCopy.Beacon.InsecureParameters.Interval == 0 {
+			cfgCopy.Beacon.InsecureParameters.Interval = defaultEpochtimeTendermintInterval
+		}
+	case beacon.BackendSCRAPE:
+		if cfgCopy.Beacon.SCRAPEParameters == nil {
+			cfgCopy.Beacon.SCRAPEParameters = new(beacon.SCRAPEParameters)
+		}
+		if cfgCopy.Beacon.SCRAPEParameters.Participants == 0 {
+			cfgCopy.Beacon.SCRAPEParameters.Participants = defaultSCRAPEParticipants
+		}
+		if cfgCopy.Beacon.SCRAPEParameters.Threshold == 0 {
+			cfgCopy.Beacon.SCRAPEParameters.Threshold = defaultSCRAPEThreshold
+		}
+		if cfgCopy.Beacon.SCRAPEParameters.PVSSThreshold == 0 {
+			cfgCopy.Beacon.SCRAPEParameters.PVSSThreshold = defaultSCRAPEPVSSThreshold
+		}
+		if cfgCopy.Beacon.SCRAPEParameters.CommitInterval == 0 {
+			cfgCopy.Beacon.SCRAPEParameters.CommitInterval = defaultSCRAPECommitInterval
+		}
+		if cfgCopy.Beacon.SCRAPEParameters.RevealInterval == 0 {
+			cfgCopy.Beacon.SCRAPEParameters.RevealInterval = defaultSCRAPERevealInterval
+		}
+		if cfgCopy.Beacon.SCRAPEParameters.TransitionDelay == 0 {
+			cfgCopy.Beacon.SCRAPEParameters.TransitionDelay = defaultSCRAPETransitionDelay
+		}
 	}
 	if cfgCopy.InitialHeight == 0 {
 		cfgCopy.InitialHeight = defaultInitialHeight

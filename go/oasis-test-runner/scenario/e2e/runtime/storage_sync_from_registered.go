@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	beacon "github.com/oasisprotocol/oasis-core/go/beacon/api"
 	"github.com/oasisprotocol/oasis-core/go/common/node"
 	consensus "github.com/oasisprotocol/oasis-core/go/consensus/api"
-	epochtime "github.com/oasisprotocol/oasis-core/go/epochtime/api"
 	"github.com/oasisprotocol/oasis-core/go/oasis-test-runner/env"
 	"github.com/oasisprotocol/oasis-core/go/oasis-test-runner/oasis"
 	"github.com/oasisprotocol/oasis-core/go/oasis-test-runner/scenario"
@@ -46,7 +46,7 @@ func (sc *storageSyncFromRegisteredImpl) Fixture() (*oasis.NetworkFixture, error
 
 	// Use mock epochtime and small group size so we can control which node will
 	// be in the committee.
-	f.Network.EpochtimeMock = true
+	f.Network.SetMockEpoch()
 	f.Runtimes[1].Storage.GroupSize = 1
 	f.Runtimes[1].Storage.MinWriteReplication = 1
 
@@ -76,7 +76,7 @@ func (sc *storageSyncFromRegisteredImpl) Fixture() (*oasis.NetworkFixture, error
 
 func (sc *storageSyncFromRegisteredImpl) Run(childEnv *env.Env) error {
 	ctx := context.Background()
-	var nextEpoch epochtime.EpochTime
+	var nextEpoch beacon.EpochTime
 
 	clientErrCh, cmd, err := sc.runtimeImpl.start(childEnv)
 	if err != nil {
@@ -92,7 +92,7 @@ func (sc *storageSyncFromRegisteredImpl) Run(childEnv *env.Env) error {
 		return err
 	}
 	// We're at epoch 2 after the initial transitions
-	nextEpoch = epochtime.EpochTime(3)
+	nextEpoch = beacon.EpochTime(3)
 
 	// Wait for the client to exit.
 	if err = sc.waitClient(childEnv, cmd, clientErrCh); err != nil {
@@ -160,6 +160,7 @@ func (sc *storageSyncFromRegisteredImpl) Run(childEnv *env.Env) error {
 	if err = sc.Net.Controller().SetEpoch(ctx, nextEpoch); err != nil {
 		return fmt.Errorf("failed to set epoch %d: %w", nextEpoch, err)
 	}
+	nextEpoch++
 
 	sc.Logger.Info("starting again storage worker 0")
 	// Start back the storage 0 so it registers and storage worker 1 can sync.
@@ -172,6 +173,13 @@ func (sc *storageSyncFromRegisteredImpl) Run(childEnv *env.Env) error {
 	sc.Logger.Info("waiting for storage worker 1 to sync from storage worker 0")
 	if err = storage1.WaitReady(ctx); err != nil {
 		return fmt.Errorf("error waiting for late storage worker to become ready: %w", err)
+	}
+
+	sc.Logger.Info("ensuring storage worker 1 REALLY is elected in committee")
+	// Another epoch transition so node is REALLY elected into storage committee
+	// and hopefully not blocked by the beacon lockout.
+	if err = sc.Net.Controller().SetEpoch(ctx, nextEpoch); err != nil {
+		return fmt.Errorf("failed to set epoch %d: %w", nextEpoch, err)
 	}
 
 	// Run the client again.
