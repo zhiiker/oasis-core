@@ -376,7 +376,9 @@ pub(super) mod test {
     fn test_iterator() {
         let server = ProtocolServer::new();
 
-        let mut tree = Tree::make().new(Box::new(NoopReadSyncer));
+        let mut tree = Tree::make()
+            .with_root_type(RootType::State)
+            .new(Box::new(NoopReadSyncer));
 
         // Test with an empty tree.
         let mut it = tree.iter(Context::background());
@@ -502,7 +504,9 @@ pub(super) mod test {
 
     #[test]
     fn test_iterator_case1() {
-        let mut tree = Tree::make().new(Box::new(NoopReadSyncer));
+        let mut tree = Tree::make()
+            .with_root_type(RootType::State)
+            .new(Box::new(NoopReadSyncer));
 
         let items = vec![
             (b"key 5".to_vec(), b"fivey".to_vec()),
@@ -520,7 +524,9 @@ pub(super) mod test {
 
     #[test]
     fn test_iterator_case2() {
-        let mut tree = Tree::make().new(Box::new(NoopReadSyncer));
+        let mut tree = Tree::make()
+            .with_root_type(RootType::State)
+            .new(Box::new(NoopReadSyncer));
 
         let items: Vec<(Vec<u8>, Vec<u8>)> = vec![
             (
@@ -562,6 +568,7 @@ pub(super) mod test {
         let mut tree = OverlayTree::new(
             Tree::make()
                 .with_capacity(0, 0)
+                .with_root_type(RootType::State)
                 .new(Box::new(NoopReadSyncer)),
         );
 

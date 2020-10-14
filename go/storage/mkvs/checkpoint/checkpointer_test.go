@@ -11,7 +11,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/oasisprotocol/oasis-core/go/common/crypto/hash"
 	"github.com/oasisprotocol/oasis-core/go/storage/mkvs"
 	db "github.com/oasisprotocol/oasis-core/go/storage/mkvs/db/api"
 	badgerDb "github.com/oasisprotocol/oasis-core/go/storage/mkvs/db/badger"
@@ -62,6 +61,7 @@ func testCheckpointer(t *testing.T, earliestVersion uint64) {
 	root.Empty()
 	root.Version = earliestVersion
 	root.Namespace = testNs
+	root.Type = node.RootTypeState
 
 	for round := earliestVersion; round < earliestVersion+10; round++ {
 		tree := mkvs.NewWithRoot(nil, ndb, root)
@@ -74,7 +74,7 @@ func testCheckpointer(t *testing.T, earliestVersion uint64) {
 		root.Version = round
 		root.Hash = rootHash
 
-		err = ndb.Finalize(ctx, root.Version, []hash.Hash{root.Hash})
+		err = ndb.Finalize(ctx, []node.Root{root})
 		require.NoError(err, "Finalize")
 		cp.NotifyNewVersion(round)
 
