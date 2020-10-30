@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/dgraph-io/badger/v2"
-	"github.com/dgraph-io/badger/v2/options"
 
 	"github.com/oasisprotocol/oasis-core/go/common"
 	cmnBadger "github.com/oasisprotocol/oasis-core/go/common/badger"
@@ -70,22 +69,7 @@ func New(cfg *api.Config) (api.NodeDB, error) {
 		readOnly:         cfg.ReadOnly,
 		discardWriteLogs: cfg.DiscardWriteLogs,
 	}
-
-	opts := badger.DefaultOptions(cfg.DB)
-	opts = opts.WithLogger(cmnBadger.NewLogAdapter(db.logger))
-	opts = opts.WithSyncWrites(!cfg.NoFsync)
-	// Allow value log truncation if required (this is needed to recover the
-	// value log file which can get corrupted in crashes).
-	opts = opts.WithTruncate(true)
-	opts = opts.WithCompression(options.Snappy)
-	opts = opts.WithBlockCacheSize(cfg.MaxCacheSize)
-	opts = opts.WithReadOnly(cfg.ReadOnly)
-	opts = opts.WithDetectConflicts(false)
-
-	if cfg.MemoryOnly {
-		db.logger.Warn("using memory-only mode, data will not be persisted")
-		opts = opts.WithInMemory(true).WithDir("").WithValueDir("")
-	}
+	opts := commonConfigToBadgerOptions(cfg, db)
 
 	var err error
 	if db.db, err = badger.OpenManaged(opts); err != nil {
@@ -137,6 +121,12 @@ type badgerNodeDB struct { // nolint: maligned
 func (d *badgerNodeDB) load() error {
 	tx := d.db.NewTransactionAt(tsMetadata, true)
 	defer tx.Discard()
+
+	// Check first if the database is even usable.
+	_, err := tx.Get(migrationMetaKeyFmt.Encode())
+	if err == nil {
+		return api.ErrUpgradeInProgress
+	}
 
 	// Load metadata.
 	item, err := tx.Get(metadataKeyFmt.Encode())
