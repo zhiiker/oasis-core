@@ -249,6 +249,18 @@ func GetInputReader(cmd *cobra.Command, cfg string) (io.ReadCloser, bool, error)
 	return r, true, err
 }
 
+func LoadSigner() (*signature.Signer, error) {
+	entityDir, err := cmdSigner.CLIDirOrPwd()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve signer dir: %w", err)
+	}
+	_, signer, err := LoadEntity(cmdSigner.Backend(), entityDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load entity: %w", err)
+	}
+	return &signer, nil
+}
+
 // LoadEntity loads the entity and it's signer.
 func LoadEntity(signerBackend, entityDir string) (*entity.Entity, signature.Signer, error) {
 	if flags.DebugTestEntity() {
