@@ -11,9 +11,9 @@ import (
 
 var (
 	// scrapeStateKeyFmt is the current SCRAPE round key format.
-	scrapeStateKeyFmt = keyformat.New(0x42)
+	scrapeStateKeyFmt = keyformat.New(0x44)
 	// scrapePendingMockEpochKeyFmt is the pending mock epoch key format.
-	scrapePendingMockEpochKeyFmt = keyformat.New(0x43)
+	scrapePendingMockEpochKeyFmt = keyformat.New(0x45)
 )
 
 func (s *ImmutableState) SCRAPEState(ctx context.Context) (*beacon.SCRAPEState, error) {

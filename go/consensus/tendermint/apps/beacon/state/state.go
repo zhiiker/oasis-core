@@ -16,20 +16,20 @@ var (
 	// epochCurrentKeyFmt is the current epoch key format.
 	//
 	// Value is CBOR-serialized epoch time state.
-	epochCurrentKeyFmt = keyformat.New(0x30)
+	epochCurrentKeyFmt = keyformat.New(0x40)
 	// epochFutureKeyFmt is the future epoch key format.
 	//
 	// Value is CBOR-serialized epoch time state.
-	epochFutureKeyFmt = keyformat.New(0x31)
+	epochFutureKeyFmt = keyformat.New(0x41)
 
 	// beaconKeyFmt is the random beacon key format.
 	//
 	// Value is raw random beacon.
-	beaconKeyFmt = keyformat.New(0x40)
+	beaconKeyFmt = keyformat.New(0x42)
 	// parametersKeyFmt is the key format used for consensus parameters.
 	//
 	// Value is CBOR-serialized beacon.ConsensusParameters.
-	parametersKeyFmt = keyformat.New(0x41)
+	parametersKeyFmt = keyformat.New(0x43)
 )
 
 // EpochTimeState is the epoch state.

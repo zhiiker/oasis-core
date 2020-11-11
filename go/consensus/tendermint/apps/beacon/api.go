@@ -12,7 +12,7 @@ import (
 
 const (
 	// AppID is the unique application identifier.
-	AppID uint8 = 0x08
+	AppID uint8 = 0x40
 
 	// AppName is the ABCI application name.
 	// Run before all other applications.
