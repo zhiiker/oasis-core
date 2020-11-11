@@ -71,6 +71,10 @@ var (
 	//
 	// Value is CBOR-serialized EpochSigning.
 	epochSigningKeyFmt = keyformat.New(0x58)
+	// governanceDepositsKeyFmt is the key format used for the governance deposits balance.
+	//
+	// Value is a CBOR-serialized quantity.
+	governanceDepositsKeyFmt = keyformat.New(0x59)
 
 	logger = logging.GetLogger("tendermint/staking")
 )
@@ -424,8 +428,8 @@ func (s *ImmutableState) Slashing(ctx context.Context) (map[staking.SlashReason]
 	return params.Slashing, nil
 }
 
-func (s *ImmutableState) LastBlockFees(ctx context.Context) (*quantity.Quantity, error) {
-	value, err := s.is.Get(ctx, lastBlockFeesKeyFmt.Encode())
+func (s *ImmutableState) loadStoredBalance(ctx context.Context, key *keyformat.KeyFormat) (*quantity.Quantity, error) {
+	value, err := s.is.Get(ctx, key.Encode())
 	if err != nil {
 		return nil, abciAPI.UnavailableStateError(err)
 	}
@@ -438,6 +442,14 @@ func (s *ImmutableState) LastBlockFees(ctx context.Context) (*quantity.Quantity,
 		return nil, abciAPI.UnavailableStateError(err)
 	}
 	return &q, nil
+}
+
+func (s *ImmutableState) LastBlockFees(ctx context.Context) (*quantity.Quantity, error) {
+	return s.loadStoredBalance(ctx, lastBlockFeesKeyFmt)
+}
+
+func (s *ImmutableState) GovernanceDeposits(ctx context.Context) (*quantity.Quantity, error) {
+	return s.loadStoredBalance(ctx, governanceDepositsKeyFmt)
 }
 
 type EpochSigning struct {
@@ -609,6 +621,11 @@ func (s *MutableState) SetEpochSigning(ctx context.Context, es *EpochSigning) er
 
 func (s *MutableState) ClearEpochSigning(ctx context.Context) error {
 	err := s.ms.Remove(ctx, epochSigningKeyFmt.Encode())
+	return abciAPI.UnavailableStateError(err)
+}
+
+func (s *MutableState) SetGovernanceDeposits(ctx context.Context, q *quantity.Quantity) error {
+	err := s.ms.Insert(ctx, governanceDepositsKeyFmt.Encode(), cbor.Marshal(q))
 	return abciAPI.UnavailableStateError(err)
 }
 

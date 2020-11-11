@@ -15,6 +15,7 @@ type Query interface {
 	TotalSupply(context.Context) (*quantity.Quantity, error)
 	CommonPool(context.Context) (*quantity.Quantity, error)
 	LastBlockFees(context.Context) (*quantity.Quantity, error)
+	GovernanceDeposits(context.Context) (*quantity.Quantity, error)
 	Threshold(context.Context, staking.ThresholdKind) (*quantity.Quantity, error)
 	DebondingInterval(context.Context) (epochtime.EpochTime, error)
 	Addresses(context.Context) ([]staking.Address, error)
@@ -53,6 +54,10 @@ func (sq *stakingQuerier) CommonPool(ctx context.Context) (*quantity.Quantity, e
 
 func (sq *stakingQuerier) LastBlockFees(ctx context.Context) (*quantity.Quantity, error) {
 	return sq.state.LastBlockFees(ctx)
+}
+
+func (sq *stakingQuerier) GovernanceDeposits(ctx context.Context) (*quantity.Quantity, error) {
+	return sq.state.GovernanceDeposits(ctx)
 }
 
 func (sq *stakingQuerier) Threshold(ctx context.Context, kind staking.ThresholdKind) (*quantity.Quantity, error) {

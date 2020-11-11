@@ -737,4 +737,6 @@ func TestGenesisSanityCheck(t *testing.T) {
 		},
 	}
 	require.Error(d.SanityCheck(), "invalid debonding delegation should be rejected")
+
+	// TODO: test governance sanity checks?
 }
