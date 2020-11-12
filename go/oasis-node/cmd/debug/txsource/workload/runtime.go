@@ -15,8 +15,10 @@ import (
 	"github.com/oasisprotocol/oasis-core/go/common/crypto/signature"
 	"github.com/oasisprotocol/oasis-core/go/common/quantity"
 	consensus "github.com/oasisprotocol/oasis-core/go/consensus/api"
+	"github.com/oasisprotocol/oasis-core/go/consensus/api/transaction"
 	runtimeClient "github.com/oasisprotocol/oasis-core/go/runtime/client/api"
 	runtimeTransaction "github.com/oasisprotocol/oasis-core/go/runtime/transaction"
+	staking "github.com/oasisprotocol/oasis-core/go/staking/api"
 )
 
 // NameRuntime is the name of the runtime workload.
@@ -45,18 +47,22 @@ const (
 type runtimeRequest uint8
 
 const (
-	runtimeRequestInsert  runtimeRequest = 0
-	runtimeRequestGet     runtimeRequest = 1
-	runtimeRequestRemove  runtimeRequest = 2
-	runtimeRequestMessage runtimeRequest = 3
+	runtimeRequestInsert   runtimeRequest = 0
+	runtimeRequestGet      runtimeRequest = 1
+	runtimeRequestRemove   runtimeRequest = 2
+	runtimeRequestMessage  runtimeRequest = 3
+	runtimeRequestWithdraw runtimeRequest = 4
+	runtimeRequestTransfer runtimeRequest = 5
 )
 
 // Weights to select between requests types.
 var runtimeRequestWeights = map[runtimeRequest]int{
-	runtimeRequestInsert:  2,
-	runtimeRequestGet:     1,
-	runtimeRequestRemove:  2,
-	runtimeRequestMessage: 1,
+	runtimeRequestInsert:   3,
+	runtimeRequestGet:      2,
+	runtimeRequestRemove:   3,
+	runtimeRequestMessage:  1,
+	runtimeRequestWithdraw: 1,
+	runtimeRequestTransfer: 1,
 }
 
 // RuntimeFlags are the runtime workload flags.
@@ -311,9 +317,37 @@ func (r *runtime) doMessageRequest(ctx context.Context, rng *rand.Rand, rtc runt
 	return nil
 }
 
+func (r *runtime) doWithdrawRequest(ctx context.Context, rng *rand.Rand, rtc runtimeClient.RuntimeClient) error {
+	// TODO
+	return nil
+}
+
+func (r *runtime) doTransferRequest(ctx context.Context, rng *rand.Rand, rtc runtimeClient.RuntimeClient) error {
+	// TODO
+	return nil
+}
+
 // Implements Workload.
 func (r *runtime) NeedsFunds() bool {
-	return false
+	return true
+}
+
+func (r *runtime) initAccounts(ctx context.Context, fundingAccount signature.Signer) error {
+	// Allow the runtime to withdraw some funds from the funding account.
+	rtAddress := staking.NewRuntimeAddress(r.runtimeID)
+
+	tx := staking.NewAllowTx(0, &transaction.Fee{}, &staking.Allow{
+		Beneficiary:  rtAddress,
+		AmountChange: *quantity.NewFromUint64(100000),
+	})
+	if err := r.FundSignAndSubmitTx(ctx, fundingAccount, tx); err != nil {
+		r.Logger.Error("failed to sign and submit allow transaction",
+			"tx", tx,
+			"signer", fundingAccount.Public(),
+		)
+		return fmt.Errorf("failed to sign and submit allow tx: %w", err)
+	}
+	return nil
 }
 
 // Implements Workload.
@@ -341,11 +375,16 @@ func (r *runtime) Run(
 	}
 	r.reckonedKeyValueState = make(map[string]string)
 
+	// Initialize staking accounts for testing runtime interactions.
+	if err = r.initAccounts(ctx, fundingAccount); err != nil {
+		return fmt.Errorf("failed to initialize accounts: %w", err)
+	}
+
 	// Set up the runtime client.
 	rtc := runtimeClient.NewRuntimeClient(conn)
 
 	// Wait for 2nd epoch, so that runtimes are up and running.
-	r.logger.Info("waiting for 2nd epoch")
+	r.Logger.Info("waiting for 2nd epoch")
 	if err := cnsc.WaitEpoch(ctx, 2); err != nil {
 		return fmt.Errorf("failed waiting for 2nd epoch: %w", err)
 	}
@@ -385,6 +424,14 @@ func (r *runtime) Run(
 		case runtimeRequestMessage:
 			if err := r.doMessageRequest(ctx, rng, rtc); err != nil {
 				return fmt.Errorf("doMessageRequest failure: %w", err)
+			}
+		case runtimeRequestWithdraw:
+			if err := r.doWithdrawRequest(ctx, rng, rtc); err != nil {
+				return fmt.Errorf("doWithdrawRequest failure: %w", err)
+			}
+		case runtimeRequestTransfer:
+			if err := r.doTransferRequest(ctx, rng, rtc); err != nil {
+				return fmt.Errorf("doTransferRequest failure: %w", err)
 			}
 		default:
 			return fmt.Errorf("unimplemented")

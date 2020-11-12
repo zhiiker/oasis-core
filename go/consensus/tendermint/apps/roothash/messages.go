@@ -7,6 +7,7 @@ import (
 	roothashApi "github.com/oasisprotocol/oasis-core/go/consensus/tendermint/apps/roothash/api"
 	roothash "github.com/oasisprotocol/oasis-core/go/roothash/api"
 	"github.com/oasisprotocol/oasis-core/go/roothash/api/block"
+	staking "github.com/oasisprotocol/oasis-core/go/staking/api"
 )
 
 func (app *rootHashApplication) processRuntimeMessages(
@@ -14,11 +15,18 @@ func (app *rootHashApplication) processRuntimeMessages(
 	rtState *roothash.RuntimeState,
 	msgs []block.Message,
 ) error {
+	// Prepare a new context for processing messages.
+	msgCtx := ctx.WithCallerAddress(staking.NewRuntimeAddress(rtState.Runtime.ID))
+	msgCtx.SetGasAccountant(tmapi.NewNopGasAccountant()) // Gas was already accounted for.
+	defer msgCtx.Close()
+
 	for i, msg := range msgs {
 		var err error
 		switch {
 		case msg.Noop != nil:
-			err = app.md.Publish(ctx, roothashApi.RuntimeMessageNoop, &msg.Noop)
+			err = app.md.Publish(msgCtx, roothashApi.RuntimeMessageNoop, &msg.Noop)
+		case msg.Staking != nil:
+			err = app.md.Publish(msgCtx, roothashApi.RuntimeMessageStaking, &msg.Staking)
 		default:
 			// Unsupported message.
 			err = roothash.ErrInvalidArgument

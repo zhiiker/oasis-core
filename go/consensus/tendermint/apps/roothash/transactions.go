@@ -205,6 +205,12 @@ func (app *rootHashApplication) executorCommit(
 		return err
 	}
 
+	/*
+		msgGasAccountant := func(msg *block.Message) {
+			// TODO: Charging for gas requires each message to know how to charge for gas?
+		}
+	*/
+
 	for _, commit := range cc.Commits {
 		if err = rtState.ExecutorPool.AddExecutorCommitment(ctx, rtState.CurrentBlock, sv, nl, &commit); err != nil { // nolint: gosec
 			ctx.Logger().Error("failed to add compute commitment to round",
