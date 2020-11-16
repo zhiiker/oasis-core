@@ -4,6 +4,8 @@ import (
 	"encoding"
 	"encoding/binary"
 	"fmt"
+
+	epochtime "github.com/oasisprotocol/oasis-core/go/epochtime/api"
 )
 
 // CustomFormat specifies a custom encoding format for a key element.
@@ -138,6 +140,12 @@ func (k *KeyFormat) Encode(values ...interface{}) []byte {
 		case *int64:
 			meta.checkSize(i, 8)
 			binary.BigEndian.PutUint64(buf, uint64(*t))
+		case epochtime.EpochTime:
+			meta.checkSize(i, 8)
+			binary.BigEndian.PutUint64(buf, uint64(t))
+		case *epochtime.EpochTime:
+			meta.checkSize(i, 8)
+			binary.BigEndian.PutUint64(buf, uint64(*t))
 		case encoding.BinaryMarshaler:
 			var (
 				data []byte
@@ -212,6 +220,9 @@ func (k *KeyFormat) Decode(data []byte, values ...interface{}) bool {
 		case *int64:
 			meta.checkSize(i, 8)
 			*t = int64(binary.BigEndian.Uint64(buf))
+		case *epochtime.EpochTime:
+			meta.checkSize(i, 8)
+			*t = epochtime.EpochTime(binary.BigEndian.Uint64(buf))
 		case encoding.BinaryUnmarshaler:
 			var err error
 			if meta.custom != nil {
@@ -257,6 +268,10 @@ func (k *KeyFormat) getElementMeta(l interface{}) *elementMeta {
 	case int64:
 		return &elementMeta{size: 8}
 	case *int64:
+		return &elementMeta{size: 8}
+	case epochtime.EpochTime:
+		return &elementMeta{size: 8}
+	case *epochtime.EpochTime:
 		return &elementMeta{size: 8}
 	case CustomFormat:
 		return &elementMeta{size: t.Size(), custom: t}

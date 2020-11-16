@@ -9,6 +9,7 @@ import (
 	"github.com/oasisprotocol/oasis-core/go/common"
 	"github.com/oasisprotocol/oasis-core/go/common/crypto/hash"
 	"github.com/oasisprotocol/oasis-core/go/common/crypto/signature"
+	epochtime "github.com/oasisprotocol/oasis-core/go/epochtime/api"
 )
 
 func TestKeyFormat(t *testing.T) {
@@ -36,27 +37,30 @@ func TestKeyFormat(t *testing.T) {
 	require.EqualValues(t, ns, decNs, "namespace encode/decode round trip")
 	require.EqualValues(t, h, decH, "hash encode/decode round trip")
 
-	fmt2 := New('L', &common.Namespace{}, uint64(0), int64(0), &hash.Hash{}, &hash.Hash{})
-	require.Equal(t, 1+32+8+8+32+32, fmt2.Size())
+	fmt2 := New('L', &common.Namespace{}, uint64(0), int64(0), epochtime.EpochTime(0), &hash.Hash{}, &hash.Hash{})
+	require.Equal(t, 1+32+8+8+8+32+32, fmt2.Size())
 
 	h.FromBytes([]byte("hash one"))
 	var h2 hash.Hash
 	h2.FromBytes([]byte("hash two"))
 	intVal := uint64(42)
 	intVal2 := int64(-17)
-	enc = fmt2.Encode(&ns, intVal, intVal2, &h, &h2)
+	epochVal := epochtime.EpochTime(47)
+	enc = fmt2.Encode(&ns, intVal, intVal2, epochVal, &h, &h2)
 
 	var (
-		decNs2     common.Namespace
-		decIntVal  uint64
-		decIntVal2 int64
-		decH2      hash.Hash
+		decNs2      common.Namespace
+		decIntVal   uint64
+		decIntVal2  int64
+		decEpochVal epochtime.EpochTime
+		decH2       hash.Hash
 	)
-	ok = fmt2.Decode(enc, &decNs, &decIntVal, &decIntVal2, &decH, &decH2)
+	ok = fmt2.Decode(enc, &decNs, &decIntVal, &decIntVal2, &decEpochVal, &decH, &decH2)
 	require.True(t, ok, "Decode")
 	require.EqualValues(t, ns, decNs2, "namespace encode/decode round trip")
 	require.EqualValues(t, intVal, decIntVal, "uint64 encode/decode round trip")
 	require.EqualValues(t, intVal2, decIntVal2, "int64 encode/decode round trip")
+	require.EqualValues(t, epochVal, decEpochVal, "epochtime encode/decode round trip")
 	require.EqualValues(t, h, decH, "hash encode/decode round trip")
 	require.EqualValues(t, h2, decH2, "hash encode/decode round trip")
 
