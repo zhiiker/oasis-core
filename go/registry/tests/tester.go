@@ -568,8 +568,8 @@ func testRegistryRuntime(t *testing.T, backend api.Backend, consensus consensusA
 				require.NoError(err, "NewTestEntities with entity node seed")
 				rt.AdmissionPolicy = api.RuntimeAdmissionPolicy{
 					EntityWhitelist: &api.EntityWhitelistRuntimeAdmissionPolicy{
-						Entities: map[signature.PublicKey]bool{
-							nodeEntities[1].Entity.ID: true,
+						Entities: map[signature.PublicKey]api.EntityWhitelistConfig{
+							nodeEntities[1].Entity.ID: {MaxNodes: make(map[node.RolesMask]uint16)},
 						},
 					},
 				}

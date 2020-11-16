@@ -293,7 +293,7 @@ func AppendRegistryState(doc *genesis.Document, entities, runtimes, nodes []stri
 			DisableRuntimeRegistration:             viper.GetBool(CfgRegistryDisableRuntimeRegistration),
 		},
 		Entities: make([]*entity.SignedEntity, 0, len(entities)),
-		Runtimes: make([]*registry.SignedRuntime, 0, len(runtimes)),
+		Runtimes: make([]*registry.Runtime, 0, len(runtimes)),
 		Nodes:    make([]*node.MultiSignedNode, 0, len(nodes)),
 	}
 
@@ -382,9 +382,18 @@ func AppendRegistryState(doc *genesis.Document, entities, runtimes, nodes []stri
 			return err
 		}
 
-		var rt registry.SignedRuntime
-		if err = json.Unmarshal(b, &rt); err != nil {
+		var srt registry.SignedRuntime
+		if err = json.Unmarshal(b, &srt); err != nil {
 			l.Error("failed to parse genesis runtime registration",
+				"err", err,
+				"filename", v,
+			)
+			return err
+		}
+
+		var rt registry.Runtime
+		if err = srt.Open(registry.RegisterGenesisRuntimeSignatureContext, &rt); err != nil {
+			l.Error("failed to open signed runtime",
 				"err", err,
 				"filename", v,
 			)

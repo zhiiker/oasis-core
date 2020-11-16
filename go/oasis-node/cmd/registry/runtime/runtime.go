@@ -410,7 +410,7 @@ func runtimeFromFlags() (*registry.Runtime, signature.Signer, error) { // nolint
 	case AdmissionPolicyNameAnyNode:
 		rt.AdmissionPolicy.AnyNode = &registry.AnyNodeRuntimeAdmissionPolicy{}
 	case AdmissionPolicyNameEntityWhitelist:
-		entities := make(map[signature.PublicKey]bool)
+		entities := make(map[signature.PublicKey]registry.EntityWhitelistConfig)
 		for _, se := range viper.GetStringSlice(CfgAdmissionPolicyEntityWhitelist) {
 			var e signature.PublicKey
 			if err = e.UnmarshalText([]byte(se)); err != nil {
@@ -420,7 +420,12 @@ func runtimeFromFlags() (*registry.Runtime, signature.Signer, error) { // nolint
 				)
 				return nil, nil, fmt.Errorf("entity whitelist runtime admission policy parse entity ID: %w", err)
 			}
-			entities[e] = true
+			entities[e] = registry.EntityWhitelistConfig{
+				MaxNodes: make(map[node.RolesMask]uint16),
+			}
+			// TODO: Handle the clusterfuck of parsing the nested map from
+			// command-line arguments sometime later.  As it is now, it's
+			// configured as unlimited nodes of any role for the given entity.
 		}
 		rt.AdmissionPolicy.EntityWhitelist = &registry.EntityWhitelistRuntimeAdmissionPolicy{
 			Entities: entities,

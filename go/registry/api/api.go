@@ -995,6 +995,82 @@ func exactlyOneTrue(conds ...bool) bool {
 	return total == 1
 }
 
+// VerifyRuntime verifies the given runtime.
+func VerifyRuntime( // nolint: gocyclo
+	params *ConsensusParameters,
+	logger *logging.Logger,
+	rt *Runtime,
+	isGenesis bool,
+	isSanityCheck bool,
+) error {
+	if rt == nil {
+		return fmt.Errorf("%w: no runtime given", ErrInvalidArgument)
+	}
+
+	if err := rt.ValidateBasic(!isGenesis && !isSanityCheck); err != nil {
+		logger.Error("RegisterRuntime: invalid runtime descriptor",
+			"runtime", rt,
+			"err", err,
+		)
+		return fmt.Errorf("%w: %s", ErrInvalidArgument, err)
+	}
+
+	if rt.ID.IsTest() && !params.DebugAllowTestRuntimes {
+		logger.Error("RegisterRuntime: test runtime registration not allowed",
+			"id", rt.ID,
+		)
+		return fmt.Errorf("%w: test runtime not allowed", ErrInvalidArgument)
+	}
+
+	if err := rt.Genesis.SanityCheck(isGenesis); err != nil {
+		return err
+	}
+
+	// Ensure a valid TEE hardware is specified.
+	if rt.TEEHardware >= node.TEEHardwareReserved {
+		logger.Error("RegisterRuntime: invalid TEE hardware specified",
+			"runtime", rt,
+		)
+		return fmt.Errorf("%w: invalid TEE hardware", ErrInvalidArgument)
+	}
+
+	// If TEE is required, check if runtime provided at least one enclave ID.
+	if rt.TEEHardware != node.TEEHardwareInvalid {
+		switch rt.TEEHardware {
+		case node.TEEHardwareIntelSGX:
+			var vi VersionInfoIntelSGX
+			if err := cbor.Unmarshal(rt.Version.TEE, &vi); err != nil {
+				logger.Error("RegisterRuntime: invalid SGX TEE Version Info",
+					"version_info", vi,
+					"err", err,
+				)
+				return fmt.Errorf("%w: invalid VersionInfo", ErrInvalidArgument)
+			}
+			if len(vi.Enclaves) == 0 {
+				return fmt.Errorf("%w: invalid VersionInfo", ErrNoEnclaveForRuntime)
+			}
+		}
+	}
+
+	// Ensure there's a valid admission policy.
+	if !exactlyOneTrue(rt.AdmissionPolicy.AnyNode != nil, rt.AdmissionPolicy.EntityWhitelist != nil) {
+		logger.Error("RegisterRuntime: invalid admission policy. exactly one policy should be non-nil",
+			"admission_policy", rt.AdmissionPolicy,
+		)
+		return fmt.Errorf("%w: invalid admission policy", ErrInvalidArgument)
+	}
+
+	// Using runtime governance for non-compute runtimes is invalid.
+	if rt.GovernanceModel == GovernanceRuntime && rt.Kind != KindCompute {
+		logger.Error("RegisterRuntime: runtime governance can only be used with compute runtimes")
+		return fmt.Errorf("%w: runtime governance can only be used with compute runtimes", ErrInvalidArgument)
+	}
+
+	// TODO: More governance model checks.
+
+	return nil
+}
+
 // VerifyRegisterRuntimeArgs verifies arguments for RegisterRuntime.
 func VerifyRegisterRuntimeArgs( // nolint: gocyclo
 	params *ConsensusParameters,
@@ -1030,57 +1106,9 @@ func VerifyRegisterRuntimeArgs( // nolint: gocyclo
 		)
 		return nil, ErrInvalidArgument
 	}
-	if err := rt.ValidateBasic(!isGenesis && !isSanityCheck); err != nil {
-		logger.Error("RegisterRuntime: invalid runtime descriptor",
-			"runtime", rt,
-			"err", err,
-		)
-		return nil, fmt.Errorf("%w: %s", ErrInvalidArgument, err)
-	}
 
-	if rt.ID.IsTest() && !params.DebugAllowTestRuntimes {
-		logger.Error("RegisterRuntime: test runtime registration not allowed",
-			"id", rt.ID,
-		)
-		return nil, fmt.Errorf("%w: test runtime not allowed", ErrInvalidArgument)
-	}
-
-	if err := rt.Genesis.SanityCheck(isGenesis); err != nil {
+	if err := VerifyRuntime(params, logger, &rt, isGenesis, isSanityCheck); err != nil {
 		return nil, err
-	}
-
-	// Ensure a valid TEE hardware is specified.
-	if rt.TEEHardware >= node.TEEHardwareReserved {
-		logger.Error("RegisterRuntime: invalid TEE hardware specified",
-			"runtime", rt,
-		)
-		return nil, fmt.Errorf("%w: invalid TEE hardware", ErrInvalidArgument)
-	}
-
-	// If TEE is required, check if runtime provided at least one enclave ID.
-	if rt.TEEHardware != node.TEEHardwareInvalid {
-		switch rt.TEEHardware {
-		case node.TEEHardwareIntelSGX:
-			var vi VersionInfoIntelSGX
-			if err := cbor.Unmarshal(rt.Version.TEE, &vi); err != nil {
-				logger.Error("RegisterRuntime: invalid SGX TEE Version Info",
-					"version_info", vi,
-					"err", err,
-				)
-				return nil, fmt.Errorf("%w: invalid VersionInfo", ErrInvalidArgument)
-			}
-			if len(vi.Enclaves) == 0 {
-				return nil, fmt.Errorf("%w: invalid VersionInfo", ErrNoEnclaveForRuntime)
-			}
-		}
-	}
-
-	// Ensure there's a valid admission policy.
-	if !exactlyOneTrue(rt.AdmissionPolicy.AnyNode != nil, rt.AdmissionPolicy.EntityWhitelist != nil) {
-		logger.Error("RegisterRuntime: invalid admission policy. exactly one policy should be non-nil",
-			"admission_policy", rt.AdmissionPolicy,
-		)
-		return nil, fmt.Errorf("%w: invalid admission policy", ErrInvalidArgument)
 	}
 
 	return &rt, nil
@@ -1165,6 +1193,23 @@ func VerifyRuntimeUpdate(logger *logging.Logger, currentRt, newRt *Runtime) erro
 		)
 		return ErrRuntimeUpdateNotAllowed
 	}
+	// Check if governance model update is valid.
+	if currentRt.GovernanceModel != newRt.GovernanceModel {
+		// Transitioning from entity to runtime governance is allowed, but
+		// all other transitions are not.
+		if !(currentRt.GovernanceModel == GovernanceEntity && newRt.GovernanceModel == GovernanceRuntime) {
+			logger.Error("RegisterRuntime: invalid governance model transition",
+				"current_gm", currentRt.GovernanceModel.String(),
+				"new_gm", newRt.GovernanceModel.String(),
+			)
+			return ErrRuntimeUpdateNotAllowed
+		}
+	}
+	// Using runtime governance for non-compute runtimes is invalid.
+	if newRt.GovernanceModel == GovernanceRuntime && newRt.Kind != KindCompute {
+		logger.Error("RegisterRuntime: runtime governance can only be used with compute runtimes")
+		return ErrRuntimeUpdateNotAllowed
+	}
 	return nil
 }
 
@@ -1184,9 +1229,9 @@ type Genesis struct {
 	Entities []*entity.SignedEntity `json:"entities,omitempty"`
 
 	// Runtimes is the initial list of runtimes.
-	Runtimes []*SignedRuntime `json:"runtimes,omitempty"`
+	Runtimes []*Runtime `json:"runtimes,omitempty"`
 	// SuspendedRuntimes is the list of suspended runtimes.
-	SuspendedRuntimes []*SignedRuntime `json:"suspended_runtimes,omitempty"`
+	SuspendedRuntimes []*Runtime `json:"suspended_runtimes,omitempty"`
 
 	// Nodes is the initial list of nodes.
 	Nodes []*node.MultiSignedNode `json:"nodes,omitempty"`

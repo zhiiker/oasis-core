@@ -634,8 +634,8 @@ func (sc *registryCLIImpl) testRuntime(ctx context.Context, childEnv *env.Env, c
 		},
 		AdmissionPolicy: registry.RuntimeAdmissionPolicy{
 			EntityWhitelist: &registry.EntityWhitelistRuntimeAdmissionPolicy{
-				Entities: map[signature.PublicKey]bool{
-					testEntity.ID: true,
+				Entities: map[signature.PublicKey]registry.EntityWhitelistConfig{
+					testEntity.ID: {MaxNodes: make(map[node.RolesMask]uint16)},
 				},
 			},
 		},

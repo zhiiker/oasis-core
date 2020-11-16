@@ -83,14 +83,6 @@ func signEntityOrDie(signer signature.Signer, e *entity.Entity) *entity.SignedEn
 	return signedEntity
 }
 
-func signRuntimeOrDie(signer signature.Signer, rt *registry.Runtime) *registry.SignedRuntime {
-	signedRuntime, err := registry.SignRuntime(signer, registry.RegisterGenesisRuntimeSignatureContext, rt)
-	if err != nil {
-		panic(err)
-	}
-	return signedRuntime
-}
-
 func signNodeOrDie(signers []signature.Signer, n *node.Node) *node.MultiSignedNode {
 	signedNode, err := node.MultiSignNode(
 		signers,
@@ -178,13 +170,13 @@ func TestGenesisSanityCheck(t *testing.T) {
 		},
 		AdmissionPolicy: registry.RuntimeAdmissionPolicy{
 			EntityWhitelist: &registry.EntityWhitelistRuntimeAdmissionPolicy{
-				Entities: map[signature.PublicKey]bool{
-					validPK: true,
+				Entities: map[signature.PublicKey]registry.EntityWhitelistConfig{
+					validPK: {MaxNodes: make(map[node.RolesMask]uint16)},
 				},
 			},
 		},
+		GovernanceModel: registry.GovernanceEntity,
 	}
-	signedTestKMRuntime := signRuntimeOrDie(signer, testKMRuntime)
 
 	testRuntimeID := hex2ns("0000000000000000000000000000000000000000000000000000000000000001", false)
 	testRuntime := &registry.Runtime{
@@ -196,6 +188,7 @@ func TestGenesisSanityCheck(t *testing.T) {
 		Executor: registry.ExecutorParameters{
 			GroupSize:    1,
 			RoundTimeout: 20,
+			MinPoolSize:  1,
 		},
 		TxnScheduler: registry.TxnSchedulerParameters{
 			Algorithm:         "simple",
@@ -209,6 +202,7 @@ func TestGenesisSanityCheck(t *testing.T) {
 			MinWriteReplication:     1,
 			MaxApplyWriteLogEntries: 100_000,
 			MaxApplyOps:             2,
+			MinPoolSize:             1,
 		},
 		AdmissionPolicy: registry.RuntimeAdmissionPolicy{
 			AnyNode: &registry.AnyNodeRuntimeAdmissionPolicy{},
@@ -219,8 +213,8 @@ func TestGenesisSanityCheck(t *testing.T) {
 				Enclaves: []sgx.EnclaveIdentity{{}},
 			}),
 		},
+		GovernanceModel: registry.GovernanceEntity,
 	}
-	signedTestRuntime := signRuntimeOrDie(signer, testRuntime)
 
 	var testConsensusAddress node.ConsensusAddress
 	_ = testConsensusAddress.UnmarshalText([]byte("AAAAAAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBBBBBBBA=@127.0.0.1:1234"))
@@ -429,27 +423,27 @@ func TestGenesisSanityCheck(t *testing.T) {
 
 	d = *testDoc
 	d.Registry.Entities = []*entity.SignedEntity{signedTestEntity}
-	d.Registry.Runtimes = []*registry.SignedRuntime{signedTestKMRuntime}
+	d.Registry.Runtimes = []*registry.Runtime{testKMRuntime}
 	require.NoError(d.SanityCheck(), "test keymanager runtime should pass")
 
 	d = *testDoc
 	d.Registry.Entities = []*entity.SignedEntity{signedTestEntity}
-	d.Registry.Runtimes = []*registry.SignedRuntime{signedTestKMRuntime, signedTestRuntime}
+	d.Registry.Runtimes = []*registry.Runtime{testKMRuntime, testRuntime}
 	require.NoError(d.SanityCheck(), "test runtimes should pass")
 
 	d = *testDoc
 	d.Registry.Entities = []*entity.SignedEntity{signedTestEntity}
-	d.Registry.Runtimes = []*registry.SignedRuntime{signedTestRuntime, signedTestKMRuntime}
+	d.Registry.Runtimes = []*registry.Runtime{testRuntime, testKMRuntime}
 	require.NoError(d.SanityCheck(), "test runtimes in reverse order should pass")
 
 	d = *testDoc
 	d.Registry.Entities = []*entity.SignedEntity{signedTestEntity}
-	d.Registry.Runtimes = []*registry.SignedRuntime{signedTestRuntime}
+	d.Registry.Runtimes = []*registry.Runtime{testRuntime}
 	require.Error(d.SanityCheck(), "test runtime with missing keymanager runtime should be rejected")
 
 	d = *testDoc
 	d.Registry.Entities = []*entity.SignedEntity{signedTestEntity}
-	d.Registry.Runtimes = []*registry.SignedRuntime{signedTestKMRuntime, signedTestRuntime, signedTestRuntime}
+	d.Registry.Runtimes = []*registry.Runtime{testKMRuntime, testRuntime, testRuntime}
 	require.Error(d.SanityCheck(), "duplicate runtime IDs should be rejected")
 
 	// TODO: fiddle with executor/merge/txnsched parameters.
@@ -459,7 +453,7 @@ func TestGenesisSanityCheck(t *testing.T) {
 	te.Nodes = []signature.PublicKey{testNode.ID}
 	signedEntityWithTestNode := signEntityOrDie(signer, &te)
 	d.Registry.Entities = []*entity.SignedEntity{signedEntityWithTestNode}
-	d.Registry.Runtimes = []*registry.SignedRuntime{}
+	d.Registry.Runtimes = []*registry.Runtime{}
 	d.Registry.Nodes = []*node.MultiSignedNode{signedTestNode}
 	require.NoError(d.SanityCheck(), "entity with node should pass")
 
@@ -469,7 +463,7 @@ func TestGenesisSanityCheck(t *testing.T) {
 	te.AllowEntitySignedNodes = false
 	signedEntityWithBrokenNode := signEntityOrDie(signer, &te)
 	d.Registry.Entities = []*entity.SignedEntity{signedEntityWithBrokenNode}
-	d.Registry.Runtimes = []*registry.SignedRuntime{}
+	d.Registry.Runtimes = []*registry.Runtime{}
 	d.Registry.Nodes = []*node.MultiSignedNode{signedTestNode}
 	require.Error(d.SanityCheck(), "node not listed among controlling entity's nodes should be rejected if the entity doesn't allow entity-signed nodes")
 
@@ -479,7 +473,7 @@ func TestGenesisSanityCheck(t *testing.T) {
 	te.AllowEntitySignedNodes = true
 	signedEntityWithBrokenNode = signEntityOrDie(signer, &te)
 	d.Registry.Entities = []*entity.SignedEntity{signedEntityWithBrokenNode}
-	d.Registry.Runtimes = []*registry.SignedRuntime{}
+	d.Registry.Runtimes = []*registry.Runtime{}
 	d.Registry.Nodes = []*node.MultiSignedNode{entitySignedTestNode}
 	require.NoError(d.SanityCheck(), "node not listed among controlling entity's nodes should still be accepted if the entity allows entity-signed nodes")
 
@@ -488,7 +482,7 @@ func TestGenesisSanityCheck(t *testing.T) {
 	tn.EntityID = unknownPK
 	signedBrokenTestNode := signNodeOrDie(nodeSigners, &tn)
 	d.Registry.Entities = []*entity.SignedEntity{signedEntityWithTestNode}
-	d.Registry.Runtimes = []*registry.SignedRuntime{signedTestKMRuntime}
+	d.Registry.Runtimes = []*registry.Runtime{testKMRuntime}
 	d.Registry.Nodes = []*node.MultiSignedNode{signedBrokenTestNode}
 	require.Error(d.SanityCheck(), "node with unknown entity ID should be rejected")
 
@@ -505,7 +499,7 @@ func TestGenesisSanityCheck(t *testing.T) {
 		panic(err)
 	}
 	d.Registry.Entities = []*entity.SignedEntity{signedEntityWithTestNode}
-	d.Registry.Runtimes = []*registry.SignedRuntime{signedTestKMRuntime}
+	d.Registry.Runtimes = []*registry.Runtime{testKMRuntime}
 	d.Registry.Nodes = []*node.MultiSignedNode{signedBrokenTestNode}
 	require.Error(d.SanityCheck(), "node with wrong signing context should be rejected")
 
@@ -514,7 +508,7 @@ func TestGenesisSanityCheck(t *testing.T) {
 	tn.Roles = 1<<16 | 1<<17
 	signedBrokenTestNode = signNodeOrDie(nodeSigners, &tn)
 	d.Registry.Entities = []*entity.SignedEntity{signedEntityWithTestNode}
-	d.Registry.Runtimes = []*registry.SignedRuntime{signedTestKMRuntime}
+	d.Registry.Runtimes = []*registry.Runtime{testKMRuntime}
 	d.Registry.Nodes = []*node.MultiSignedNode{signedBrokenTestNode}
 	require.Error(d.SanityCheck(), "node with any reserved role bits set should be rejected")
 
@@ -523,7 +517,7 @@ func TestGenesisSanityCheck(t *testing.T) {
 	tn.Roles = 0
 	signedBrokenTestNode = signNodeOrDie(nodeSigners, &tn)
 	d.Registry.Entities = []*entity.SignedEntity{signedEntityWithTestNode}
-	d.Registry.Runtimes = []*registry.SignedRuntime{signedTestKMRuntime}
+	d.Registry.Runtimes = []*registry.Runtime{testKMRuntime}
 	d.Registry.Nodes = []*node.MultiSignedNode{signedBrokenTestNode}
 	require.Error(d.SanityCheck(), "node without any role bits set should be rejected")
 
@@ -532,7 +526,7 @@ func TestGenesisSanityCheck(t *testing.T) {
 	tn.TLS.PubKey = signature.PublicKey{}
 	signedBrokenTestNode = signNodeOrDie(nodeSigners, &tn)
 	d.Registry.Entities = []*entity.SignedEntity{signedEntityWithTestNode}
-	d.Registry.Runtimes = []*registry.SignedRuntime{signedTestKMRuntime}
+	d.Registry.Runtimes = []*registry.Runtime{testKMRuntime}
 	d.Registry.Nodes = []*node.MultiSignedNode{signedBrokenTestNode}
 	require.Error(d.SanityCheck(), "node with invalid TLS public key should be rejected")
 
@@ -541,7 +535,7 @@ func TestGenesisSanityCheck(t *testing.T) {
 	tn.Consensus.ID = invalidPK
 	signedBrokenTestNode = signNodeOrDie(nodeSigners, &tn)
 	d.Registry.Entities = []*entity.SignedEntity{signedEntityWithTestNode}
-	d.Registry.Runtimes = []*registry.SignedRuntime{signedTestKMRuntime}
+	d.Registry.Runtimes = []*registry.Runtime{testKMRuntime}
 	d.Registry.Nodes = []*node.MultiSignedNode{signedBrokenTestNode}
 	require.Error(d.SanityCheck(), "node with invalid consensus ID should be rejected")
 
@@ -550,7 +544,7 @@ func TestGenesisSanityCheck(t *testing.T) {
 	tn.Roles = node.RoleComputeWorker
 	signedBrokenTestNode = signNodeOrDie(nodeSigners, &tn)
 	d.Registry.Entities = []*entity.SignedEntity{signedEntityWithTestNode}
-	d.Registry.Runtimes = []*registry.SignedRuntime{signedTestKMRuntime}
+	d.Registry.Runtimes = []*registry.Runtime{testKMRuntime}
 	d.Registry.Nodes = []*node.MultiSignedNode{signedBrokenTestNode}
 	require.Error(d.SanityCheck(), "compute node without runtimes should be rejected")
 
@@ -559,7 +553,7 @@ func TestGenesisSanityCheck(t *testing.T) {
 	tn.Roles = node.RoleKeyManager
 	signedBrokenTestNode = signNodeOrDie(nodeSigners, &tn)
 	d.Registry.Entities = []*entity.SignedEntity{signedEntityWithTestNode}
-	d.Registry.Runtimes = []*registry.SignedRuntime{signedTestKMRuntime}
+	d.Registry.Runtimes = []*registry.Runtime{testKMRuntime}
 	d.Registry.Nodes = []*node.MultiSignedNode{signedBrokenTestNode}
 	require.Error(d.SanityCheck(), "keymanager node without runtimes should be rejected")
 
@@ -573,7 +567,7 @@ func TestGenesisSanityCheck(t *testing.T) {
 	}
 	signedKMTestNode := signNodeOrDie(nodeSigners, &tn)
 	d.Registry.Entities = []*entity.SignedEntity{signedEntityWithTestNode}
-	d.Registry.Runtimes = []*registry.SignedRuntime{signedTestKMRuntime}
+	d.Registry.Runtimes = []*registry.Runtime{testKMRuntime}
 	d.Registry.Nodes = []*node.MultiSignedNode{signedKMTestNode}
 	require.NoError(d.SanityCheck(), "keymanager node with valid runtime should pass")
 
@@ -587,7 +581,7 @@ func TestGenesisSanityCheck(t *testing.T) {
 	}
 	signedBrokenTestNode = signNodeOrDie(nodeSigners, &tn)
 	d.Registry.Entities = []*entity.SignedEntity{signedEntityWithTestNode}
-	d.Registry.Runtimes = []*registry.SignedRuntime{signedTestKMRuntime}
+	d.Registry.Runtimes = []*registry.Runtime{testKMRuntime}
 	d.Registry.Nodes = []*node.MultiSignedNode{signedBrokenTestNode}
 	require.Error(d.SanityCheck(), "keymanager node with invalid runtime should be rejected")
 
@@ -601,7 +595,7 @@ func TestGenesisSanityCheck(t *testing.T) {
 	}
 	signedBrokenTestNode = signNodeOrDie(nodeSigners, &tn)
 	d.Registry.Entities = []*entity.SignedEntity{signedEntityWithTestNode}
-	d.Registry.Runtimes = []*registry.SignedRuntime{signedTestKMRuntime, signedTestRuntime}
+	d.Registry.Runtimes = []*registry.Runtime{testKMRuntime, testRuntime}
 	d.Registry.Nodes = []*node.MultiSignedNode{signedBrokenTestNode}
 	require.Error(d.SanityCheck(), "keymanager node with non-KM runtime should be rejected")
 
@@ -615,7 +609,7 @@ func TestGenesisSanityCheck(t *testing.T) {
 	}
 	signedBrokenTestNode = signNodeOrDie(nodeSigners, &tn)
 	d.Registry.Entities = []*entity.SignedEntity{signedEntityWithTestNode}
-	d.Registry.Runtimes = []*registry.SignedRuntime{signedTestKMRuntime, signedTestRuntime}
+	d.Registry.Runtimes = []*registry.Runtime{testKMRuntime, testRuntime}
 	d.Registry.Nodes = []*node.MultiSignedNode{signedBrokenTestNode}
 	require.Error(d.SanityCheck(), "compute node with non-compute runtime should be rejected")
 
@@ -629,7 +623,7 @@ func TestGenesisSanityCheck(t *testing.T) {
 	}
 	signedComputeTestNode := signNodeOrDie(nodeSigners, &tn)
 	d.Registry.Entities = []*entity.SignedEntity{signedEntityWithTestNode}
-	d.Registry.Runtimes = []*registry.SignedRuntime{signedTestKMRuntime, signedTestRuntime}
+	d.Registry.Runtimes = []*registry.Runtime{testKMRuntime, testRuntime}
 	d.Registry.Nodes = []*node.MultiSignedNode{signedComputeTestNode}
 	require.NoError(d.SanityCheck(), "compute node with compute runtime should pass")
 
@@ -643,7 +637,7 @@ func TestGenesisSanityCheck(t *testing.T) {
 	}
 	signedStorageTestNode := signNodeOrDie(nodeSigners, &tn)
 	d.Registry.Entities = []*entity.SignedEntity{signedEntityWithTestNode}
-	d.Registry.Runtimes = []*registry.SignedRuntime{signedTestKMRuntime, signedTestRuntime}
+	d.Registry.Runtimes = []*registry.Runtime{testKMRuntime, testRuntime}
 	d.Registry.Nodes = []*node.MultiSignedNode{signedStorageTestNode}
 	require.NoError(d.SanityCheck(), "storage node with compute runtime should pass")
 

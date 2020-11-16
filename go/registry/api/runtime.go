@@ -27,6 +27,10 @@ var (
 	// kind is malformed or unknown.
 	ErrUnsupportedRuntimeKind = errors.New("runtime: unsupported runtime kind")
 
+	// ErrUnsupportedRuntimeGovernanceModel is the error returned when the
+	// parsed runtime governance model is malformed or unknown.
+	ErrUnsupportedRuntimeGovernanceModel = errors.New("runtime: unsupported governance model")
+
 	_ prettyprint.PrettyPrinter = (*SignedRuntime)(nil)
 )
 
@@ -92,10 +96,13 @@ type ExecutorParameters struct {
 
 	// RoundTimeout is the round timeout in consensus blocks.
 	RoundTimeout int64 `json:"round_timeout"`
+
+	// MinPoolSize is the minimum required candidate compute node pool size.
+	MinPoolSize uint64 `json:"min_pool_size"`
 }
 
 // ValidateBasic performs basic executor parameter validity checks.
-func (e *ExecutorParameters) ValidateBasic() error {
+func (e *ExecutorParameters) ValidateBasic(ver uint16) error {
 	if e.GroupSize == 0 {
 		return fmt.Errorf("executor primary group too small")
 	}
@@ -106,6 +113,11 @@ func (e *ExecutorParameters) ValidateBasic() error {
 	if e.RoundTimeout < 5 {
 		return fmt.Errorf("round timeout too small")
 	}
+
+	if ver > 1 && e.MinPoolSize < e.GroupSize+e.GroupBackupSize {
+		return fmt.Errorf("minimum pool size too small")
+	}
+
 	return nil
 }
 
@@ -175,10 +187,13 @@ type StorageParameters struct {
 
 	// CheckpointChunkSize is the chunk size parameter for checkpoint creation.
 	CheckpointChunkSize uint64 `json:"checkpoint_chunk_size"`
+
+	// MinPoolSize is the minimum required candidate storage node pool size.
+	MinPoolSize uint64 `json:"min_pool_size"`
 }
 
 // ValidateBasic performs basic storage parameter validity checks.
-func (s *StorageParameters) ValidateBasic() error {
+func (s *StorageParameters) ValidateBasic(ver uint16) error {
 	// Ensure there is at least one member of the storage group.
 	if s.GroupSize == 0 {
 		return fmt.Errorf("storage group too small")
@@ -210,6 +225,11 @@ func (s *StorageParameters) ValidateBasic() error {
 			return fmt.Errorf("storage CheckpointChunkSize parameter too small")
 		}
 	}
+
+	if ver > 1 && s.MinPoolSize < s.GroupSize {
+		return fmt.Errorf("minimum pool size too small")
+	}
+
 	return nil
 }
 
@@ -218,7 +238,16 @@ type AnyNodeRuntimeAdmissionPolicy struct{}
 
 // EntityWhitelistRuntimeAdmissionPolicy allows only whitelisted entities' nodes to register.
 type EntityWhitelistRuntimeAdmissionPolicy struct {
-	Entities map[signature.PublicKey]bool `json:"entities"`
+	Entities map[signature.PublicKey]EntityWhitelistConfig `json:"entities"`
+}
+
+type EntityWhitelistConfig struct {
+	// MaxNodes is the maximum number of nodes that an entity can register under
+	// the given runtime for a specific role. If the map is empty or absent, the
+	// number of nodes is unlimited. If the map is present and non-empty, the
+	// the number of nodes is restricted to the specified maximum (where zero
+	// means no nodes allowed), any missing roles imply zero nodes.
+	MaxNodes map[node.RolesMask]uint16 `json:"max_nodes,omitempty"`
 }
 
 // RuntimeAdmissionPolicy is a specification of which nodes are allowed to register for a runtime.
@@ -263,7 +292,7 @@ func (s *RuntimeStakingParameters) ValidateBasic(runtimeKind RuntimeKind) error 
 const (
 	// LatestRuntimeDescriptorVersion is the latest entity descriptor version that should be used
 	// for all new descriptors. Using earlier versions may be rejected.
-	LatestRuntimeDescriptorVersion = 1
+	LatestRuntimeDescriptorVersion = 2
 
 	// Minimum and maximum descriptor versions that are allowed.
 	minRuntimeDescriptorVersion = 1
@@ -312,6 +341,56 @@ type Runtime struct { // nolint: maligned
 
 	// Staking stores the runtime's staking-related parameters.
 	Staking RuntimeStakingParameters `json:"staking,omitempty"`
+
+	// GovernanceModel specifies the runtime governance model.
+	GovernanceModel RuntimeGovernanceModel `json:"governance_model"`
+}
+
+// RuntimeGovernanceModel specifies the runtime governance model.
+type RuntimeGovernanceModel uint8
+
+const (
+	GovernanceInvalid   RuntimeGovernanceModel = 0
+	GovernanceEntity    RuntimeGovernanceModel = 1
+	GovernanceRuntime   RuntimeGovernanceModel = 2
+	GovernanceConsensus RuntimeGovernanceModel = 3
+
+	gmInvalid   = "invalid"
+	gmEntity    = "entity"
+	gmRuntime   = "runtime"
+	gmConsensus = "consensus"
+)
+
+// String returns a string representation of a runtime governance model.
+func (gm RuntimeGovernanceModel) String() string {
+	switch gm {
+	case GovernanceInvalid:
+		return gmInvalid
+	case GovernanceEntity:
+		return gmEntity
+	case GovernanceRuntime:
+		return gmRuntime
+	case GovernanceConsensus:
+		return gmConsensus
+	default:
+		return "[unsupported runtime governance model]"
+	}
+}
+
+// FromString deserializes a string into a RuntimeGovernanceModel.
+func (gm *RuntimeGovernanceModel) FromString(str string) error {
+	switch strings.ToLower(str) {
+	case gmEntity:
+		*gm = GovernanceEntity
+	case gmRuntime:
+		*gm = GovernanceRuntime
+	case gmConsensus:
+		*gm = GovernanceConsensus
+	default:
+		return ErrUnsupportedRuntimeGovernanceModel
+	}
+
+	return nil
 }
 
 // ValidateBasic performs basic descriptor validity checks.
@@ -346,13 +425,13 @@ func (r *Runtime) ValidateBasic(strictVersion bool) error {
 			return fmt.Errorf("compute runtime has self as key manager")
 		}
 
-		if err := r.Executor.ValidateBasic(); err != nil {
+		if err := r.Executor.ValidateBasic(v); err != nil {
 			return fmt.Errorf("bad executor parameters: %w", err)
 		}
 		if err := r.TxnScheduler.ValidateBasic(); err != nil {
 			return fmt.Errorf("bad txn scheduler parameters: %w", err)
 		}
-		if err := r.Storage.ValidateBasic(); err != nil {
+		if err := r.Storage.ValidateBasic(v); err != nil {
 			return fmt.Errorf("bad storage parameters: %w", err)
 		}
 	case KindKeyManager:
@@ -376,6 +455,11 @@ func (r *Runtime) ValidateBasic(strictVersion bool) error {
 	if err := r.Staking.ValidateBasic(r.Kind); err != nil {
 		return fmt.Errorf("bad staking parameters: %w", err)
 	}
+
+	if v > 1 && (r.GovernanceModel < 1 || r.GovernanceModel > GovernanceConsensus) {
+		return ErrUnsupportedRuntimeGovernanceModel
+	}
+
 	return nil
 }
 

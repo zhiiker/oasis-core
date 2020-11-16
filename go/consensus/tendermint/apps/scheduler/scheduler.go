@@ -362,7 +362,7 @@ func (app *schedulerApplication) electCommittee(
 		rngCtx       []byte
 		isSuitableFn func(*api.Context, *node.Node, *registry.Runtime) bool
 
-		workerSize, backupSize int
+		workerSize, backupSize, minSize int
 	)
 
 	switch kind {
@@ -371,10 +371,12 @@ func (app *schedulerApplication) electCommittee(
 		isSuitableFn = app.isSuitableExecutorWorker
 		workerSize = int(rt.Executor.GroupSize)
 		backupSize = int(rt.Executor.GroupBackupSize)
+		minSize = int(rt.Executor.MinPoolSize)
 	case scheduler.KindStorage:
 		rngCtx = RNGContextStorage
 		isSuitableFn = app.isSuitableStorageWorker
 		workerSize = int(rt.Storage.GroupSize)
+		minSize = int(rt.Storage.MinPoolSize)
 	default:
 		return fmt.Errorf("tendermint/scheduler: invalid committee type: %v", kind)
 	}
@@ -407,7 +409,7 @@ func (app *schedulerApplication) electCommittee(
 		return nil
 	}
 
-	nrNodes, wantedNodes := len(nodeList), workerSize+backupSize
+	nrNodes, wantedNodes := len(nodeList), minSize
 	if wantedNodes > nrNodes {
 		ctx.Logger().Error("committee size exceeds available nodes (pre-stake)",
 			"kind", kind,

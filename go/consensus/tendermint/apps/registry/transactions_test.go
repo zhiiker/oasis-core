@@ -120,14 +120,12 @@ func TestRegisterNode(t *testing.T) {
 			"ComputeNode",
 			func(tcd *testCaseData) {
 				// Create a new runtime.
-				rtSigner := memorySigner.NewTestSigner("consensus/tendermint/apps/registry: runtime signer: ComputeNode")
 				rt := registry.Runtime{
 					Versioned: cbor.NewVersioned(registry.LatestRuntimeDescriptorVersion),
 					ID:        common.NewTestNamespaceFromSeed([]byte("consensus/tendermint/apps/registry: runtime: ComputeNode"), 0),
 					Kind:      registry.KindCompute,
 				}
-				sigRt, _ := registry.SignRuntime(rtSigner, registry.RegisterRuntimeSignatureContext, &rt)
-				_ = state.SetRuntime(ctx, &rt, sigRt, false)
+				_ = state.SetRuntime(ctx, &rt, false)
 
 				tcd.node.AddRoles(node.RoleComputeWorker)
 				tcd.node.Runtimes = []*node.Runtime{
@@ -143,7 +141,6 @@ func TestRegisterNode(t *testing.T) {
 			"ComputeNodeWithoutPerRuntimeStake",
 			func(tcd *testCaseData) {
 				// Create a new runtime.
-				rtSigner := memorySigner.NewTestSigner("consensus/tendermint/apps/registry: runtime signer: ComputeNodeWithoutPerRuntimeStake")
 				rt := registry.Runtime{
 					Versioned: cbor.NewVersioned(registry.LatestRuntimeDescriptorVersion),
 					ID:        common.NewTestNamespaceFromSeed([]byte("consensus/tendermint/apps/registry: runtime: ComputeNodeWithoutPerRuntimeStake"), 0),
@@ -154,8 +151,7 @@ func TestRegisterNode(t *testing.T) {
 						},
 					},
 				}
-				sigRt, _ := registry.SignRuntime(rtSigner, registry.RegisterRuntimeSignatureContext, &rt)
-				_ = state.SetRuntime(ctx, &rt, sigRt, false)
+				_ = state.SetRuntime(ctx, &rt, false)
 
 				tcd.node.AddRoles(node.RoleComputeWorker)
 				tcd.node.Runtimes = []*node.Runtime{
@@ -171,7 +167,6 @@ func TestRegisterNode(t *testing.T) {
 			"ComputeNodeWithPerRuntimeStake",
 			func(tcd *testCaseData) {
 				// Create a new runtime.
-				rtSigner := memorySigner.NewTestSigner("consensus/tendermint/apps/registry: runtime signer: ComputeNodeWithPerRuntimeStake")
 				rt := registry.Runtime{
 					Versioned: cbor.NewVersioned(registry.LatestRuntimeDescriptorVersion),
 					ID:        common.NewTestNamespaceFromSeed([]byte("consensus/tendermint/apps/registry: runtime: ComputeNodeWithPerRuntimeStake"), 0),
@@ -182,8 +177,7 @@ func TestRegisterNode(t *testing.T) {
 						},
 					},
 				}
-				sigRt, _ := registry.SignRuntime(rtSigner, registry.RegisterRuntimeSignatureContext, &rt)
-				_ = state.SetRuntime(ctx, &rt, sigRt, false)
+				_ = state.SetRuntime(ctx, &rt, false)
 
 				// Add bonded stake (hacky, without a self-delegation).
 				_ = stakeState.SetAccount(ctx, staking.NewAddress(tcd.node.EntityID), &staking.Account{
@@ -207,8 +201,6 @@ func TestRegisterNode(t *testing.T) {
 		{
 			"ComputeNodeWithoutPerRuntimeStakeMulti",
 			func(tcd *testCaseData) {
-				rtSigner := memorySigner.NewTestSigner("consensus/tendermint/apps/registry: runtime signer: ComputeNodeWithoutPerRuntimeStakeMulti")
-
 				// Create a new runtime.
 				rt1 := registry.Runtime{
 					Versioned: cbor.NewVersioned(registry.LatestRuntimeDescriptorVersion),
@@ -220,14 +212,12 @@ func TestRegisterNode(t *testing.T) {
 						},
 					},
 				}
-				sigRt1, _ := registry.SignRuntime(rtSigner, registry.RegisterRuntimeSignatureContext, &rt1)
-				_ = state.SetRuntime(ctx, &rt1, sigRt1, false)
+				_ = state.SetRuntime(ctx, &rt1, false)
 
 				// Create another runtime with a different identifier.
 				rt2 := rt1
 				rt2.ID = common.NewTestNamespaceFromSeed([]byte("consensus/tendermint/apps/registry: runtime: ComputeNodeWithoutPerRuntimeStakeMulti 2"), 0)
-				sigRt2, _ := registry.SignRuntime(rtSigner, registry.RegisterRuntimeSignatureContext, &rt2)
-				_ = state.SetRuntime(ctx, &rt2, sigRt2, false)
+				_ = state.SetRuntime(ctx, &rt2, false)
 
 				// Add bonded stake (hacky, without a self-delegation).
 				_ = stakeState.SetAccount(ctx, staking.NewAddress(tcd.node.EntityID), &staking.Account{
@@ -252,22 +242,18 @@ func TestRegisterNode(t *testing.T) {
 		{
 			"ComputeNodeWithoutGlobalStakeMulti",
 			func(tcd *testCaseData) {
-				rtSigner := memorySigner.NewTestSigner("consensus/tendermint/apps/registry: runtime signer: ComputeNodeWithoutGlobalStakeMulti")
-
 				// Create a new runtime.
 				rt1 := registry.Runtime{
 					Versioned: cbor.NewVersioned(registry.LatestRuntimeDescriptorVersion),
 					ID:        common.NewTestNamespaceFromSeed([]byte("consensus/tendermint/apps/registry: runtime: ComputeNodeWithoutGlobalStakeMulti 1"), 0),
 					Kind:      registry.KindCompute,
 				}
-				sigRt1, _ := registry.SignRuntime(rtSigner, registry.RegisterRuntimeSignatureContext, &rt1)
-				_ = state.SetRuntime(ctx, &rt1, sigRt1, false)
+				_ = state.SetRuntime(ctx, &rt1, false)
 
 				// Create another runtime with a different identifier.
 				rt2 := rt1
 				rt2.ID = common.NewTestNamespaceFromSeed([]byte("consensus/tendermint/apps/registry: runtime: ComputeNodeWithoutGlobalStakeMulti 2"), 0)
-				sigRt2, _ := registry.SignRuntime(rtSigner, registry.RegisterRuntimeSignatureContext, &rt2)
-				_ = state.SetRuntime(ctx, &rt2, sigRt2, false)
+				_ = state.SetRuntime(ctx, &rt2, false)
 
 				// Add bonded stake (hacky, without a self-delegation).
 				_ = stakeState.SetAccount(ctx, staking.NewAddress(tcd.node.EntityID), &staking.Account{
