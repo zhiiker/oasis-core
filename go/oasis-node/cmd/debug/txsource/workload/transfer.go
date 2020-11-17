@@ -9,19 +9,23 @@ import (
 
 	"github.com/oasisprotocol/oasis-core/go/common/crypto/signature"
 	memorySigner "github.com/oasisprotocol/oasis-core/go/common/crypto/signature/signers/memory"
-	"github.com/oasisprotocol/oasis-core/go/common/logging"
 	"github.com/oasisprotocol/oasis-core/go/common/quantity"
 	consensus "github.com/oasisprotocol/oasis-core/go/consensus/api"
 	"github.com/oasisprotocol/oasis-core/go/consensus/api/transaction"
 	staking "github.com/oasisprotocol/oasis-core/go/staking/api"
 )
 
-const (
-	// NameTransfer is the name of the transfer workload.
-	//
-	// Transfer workload continuously submits transfer and burn transactions.
-	NameTransfer = "transfer"
+// NameTransfer is the name of the transfer workload.
+//
+// Transfer workload continuously submits transfer and burn transactions.
+const NameTransfer = "transfer"
 
+// Transfer is the transfer workload.
+var Transfer = &transfer{
+	BaseWorkload: NewBaseWorkload(NameTransfer),
+}
+
+const (
 	transferNumAccounts    = 10
 	transferAmount         = 1
 	transferBurnAmount     = 10
@@ -36,7 +40,7 @@ type transferAccount struct {
 }
 
 type transfer struct {
-	logger *logging.Logger
+	BaseWorkload
 
 	consensus consensus.ClientBackend
 
@@ -54,13 +58,13 @@ func (t *transfer) doTransferTx(ctx context.Context, from, to *transferAccount) 
 	tx := staking.NewTransferTx(from.reckonedNonce, &transaction.Fee{}, &transfer)
 	from.reckonedNonce++
 
-	t.logger.Debug("transferring stake",
+	t.Logger.Debug("transferring stake",
 		"from", from.address,
 		"to", to.address,
 		"base_units", transferAmount,
 	)
-	if err := fundSignAndSubmitTx(ctx, t.logger, t.consensus, from.signer, tx, t.fundingAccount); err != nil {
-		t.logger.Error("failed to sign and submit transfer transaction",
+	if err := t.FundSignAndSubmitTx(ctx, from.signer, tx); err != nil {
+		t.Logger.Error("failed to sign and submit transfer transaction",
 			"tx", tx,
 			"signer", from.signer.Public(),
 		)
@@ -84,7 +88,7 @@ func (t *transfer) doTransferTx(ctx context.Context, from, to *transferAccount) 
 
 func (t *transfer) doBurnTx(ctx context.Context, acc *transferAccount) error {
 	// Fund account with stake that will be burned.
-	if err := transferFunds(ctx, t.logger, t.consensus, t.fundingAccount, acc.address, int64(transferBurnAmount)); err != nil {
+	if err := t.TransferFunds(ctx, t.fundingAccount, acc.address, transferBurnAmount); err != nil {
 		return fmt.Errorf("workload/transfer: account funding failure: %w", err)
 	}
 
@@ -95,12 +99,12 @@ func (t *transfer) doBurnTx(ctx context.Context, acc *transferAccount) error {
 	tx := staking.NewBurnTx(acc.reckonedNonce, &transaction.Fee{}, &burn)
 	acc.reckonedNonce++
 
-	t.logger.Debug("Burning stake",
+	t.Logger.Debug("Burning stake",
 		"account", acc.address,
 		"base_units", transferBurnAmount,
 	)
-	if err := fundSignAndSubmitTx(ctx, t.logger, t.consensus, acc.signer, tx, t.fundingAccount); err != nil {
-		t.logger.Error("failed to sign and submit transfer transaction",
+	if err := t.FundSignAndSubmitTx(ctx, acc.signer, tx); err != nil {
+		t.Logger.Error("failed to sign and submit transfer transaction",
 			"tx", tx,
 			"signer", acc.signer.Public(),
 		)
@@ -128,13 +132,13 @@ func (t *transfer) doAllowTx(ctx context.Context, rng *rand.Rand, acct, benefici
 	tx := staking.NewAllowTx(acct.reckonedNonce, &transaction.Fee{}, &allow)
 	acct.reckonedNonce++
 
-	t.logger.Debug("updating allowance",
+	t.Logger.Debug("updating allowance",
 		"acct", acct.address,
 		"beneficiary", beneficiary.address,
 		"amount_change", allow.AmountChange,
 	)
-	if err := fundSignAndSubmitTx(ctx, t.logger, t.consensus, acct.signer, tx, t.fundingAccount); err != nil {
-		t.logger.Error("failed to sign and submit allow transaction",
+	if err := t.FundSignAndSubmitTx(ctx, acct.signer, tx); err != nil {
+		t.Logger.Error("failed to sign and submit allow transaction",
 			"tx", tx,
 			"signer", acct.signer.Public(),
 		)
@@ -182,13 +186,13 @@ func (t *transfer) doWithdrawTx(ctx context.Context, rng *rand.Rand, from, to *t
 	tx := staking.NewWithdrawTx(to.reckonedNonce, &transaction.Fee{}, &withdraw)
 	to.reckonedNonce++
 
-	t.logger.Debug("withdrawing stake",
+	t.Logger.Debug("withdrawing stake",
 		"from", from.address,
 		"to", to.address,
 		"amount", withdraw.Amount,
 	)
-	if err := fundSignAndSubmitTx(ctx, t.logger, t.consensus, to.signer, tx, t.fundingAccount); err != nil {
-		t.logger.Error("failed to sign and submit withdraw transaction",
+	if err := t.FundSignAndSubmitTx(ctx, to.signer, tx); err != nil {
+		t.Logger.Error("failed to sign and submit withdraw transaction",
 			"tx", tx,
 			"signer", to.signer.Public(),
 		)
@@ -246,11 +250,14 @@ func (t *transfer) Run(
 	rng *rand.Rand,
 	conn *grpc.ClientConn,
 	cnsc consensus.ClientBackend,
+	sm consensus.SubmissionManager,
 	fundingAccount signature.Signer,
 ) error {
+	// Initialize base workload.
+	t.BaseWorkload.Init(cnsc, sm, fundingAccount)
+
 	ctx := context.Background()
 
-	t.logger = logging.GetLogger("cmd/txsource/workload/transfer")
 	t.consensus = cnsc
 	t.accounts = make([]transferAccount, transferNumAccounts)
 	t.allowances = make(map[staking.Address]map[staking.Address]quantity.Quantity)
@@ -271,8 +278,7 @@ func (t *transfer) Run(
 	// Read all the account info up front.
 	stakingClient := staking.NewStakingClient(conn)
 	for i := range t.accounts {
-		fundAmount := transferAmount // funds for for a transfer
-		if err := transferFunds(ctx, t.logger, cnsc, t.fundingAccount, t.accounts[i].address, int64(fundAmount)); err != nil {
+		if err := t.TransferFunds(ctx, fundingAccount, t.accounts[i].address, transferAmount); err != nil {
 			return fmt.Errorf("workload/transfer: account funding failure: %w", err)
 		}
 		var account *staking.Account
@@ -283,7 +289,7 @@ func (t *transfer) Run(
 		if err != nil {
 			return fmt.Errorf("stakingClient.Account %s: %w", t.accounts[i].address, err)
 		}
-		t.logger.Debug("account info",
+		t.Logger.Debug("account info",
 			"i", i,
 			"address", t.accounts[i].address,
 			"info", account,
@@ -341,7 +347,7 @@ func (t *transfer) Run(
 		// Finish once the time is up.
 		select {
 		case <-gracefulExit.Done():
-			t.logger.Debug("time's up")
+			t.Logger.Debug("time's up")
 			return nil
 		default:
 		}
