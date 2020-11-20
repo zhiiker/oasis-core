@@ -17,6 +17,7 @@ import (
 	db "github.com/oasisprotocol/oasis-core/go/storage/mkvs/db/api"
 	"github.com/oasisprotocol/oasis-core/go/storage/mkvs/db/badger"
 	"github.com/oasisprotocol/oasis-core/go/storage/mkvs/node"
+	workerStorage "github.com/oasisprotocol/oasis-core/go/worker/storage"
 )
 
 var (
@@ -48,14 +49,14 @@ type migrateHelper struct {
 func (mh *migrateHelper) GetRootForHash(root hash.Hash, version uint64) (node.Root, error) {
 	block, err := mh.history.GetBlock(mh.ctx, version)
 	if err != nil {
-		//return node.Root{}, err
+		return node.Root{}, err
 		// XXX
-		return node.Root{
-			Namespace: mh.history.RuntimeID(),
-			Version: version,
-			Type: node.RootTypeInvalid,
-			Hash: root,
-		}, nil
+		//return node.Root{
+		//	Namespace: mh.history.RuntimeID(),
+		//	Version: version,
+		//	Type: node.RootTypeInvalid,
+		//	Hash: root,
+		//}, nil
 	}
 
 	for _, blockRoot := range block.Header.StorageRoots() {
@@ -108,14 +109,16 @@ func doMigrate(cmd *cobra.Command, args []string) {
 			fmt.Printf(" ** Upgrading storage database for runtime %v...\r", rt)
 		}
 		err := func() error {
-			history, err := history.New(dataDir, rt, nil)
+			runtimeDir := registry.GetRuntimeStateDir(dataDir, rt)
+
+			history, err := history.New(runtimeDir, rt, nil)
 			if err != nil {
 				return fmt.Errorf("error creating history provider: %w", err)
 			}
 			defer history.Close()
 
 			nodeCfg := &db.Config{
-				DB:        dataDir,
+				DB:        workerStorage.GetLocalBackendDBDir(runtimeDir, viper.GetString(workerStorage.CfgBackend)),
 				Namespace: rt,
 			}
 
@@ -127,7 +130,7 @@ func doMigrate(cmd *cobra.Command, args []string) {
 
 			newVersion, err := badger.Migrate(nodeCfg, helper)
 			if err != nil {
-				return fmt.Errorf("node datagase migrator returned error: %w", err)
+				return fmt.Errorf("node database migrator returned error: %w", err)
 			}
 			if !pretty {
 				logger.Info("successfully migrated node database", "new_version", newVersion)

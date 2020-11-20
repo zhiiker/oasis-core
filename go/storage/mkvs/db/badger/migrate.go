@@ -151,16 +151,6 @@ type v4Migrator struct {
 	meta v4MigratorMetadata
 }
 
-func (v4 *v4Migrator) seek(it *badger.Iterator) {
-	it.Rewind()
-	if len(v4.meta.LastKey) == 0 {
-		return
-	}
-	it.Seek(v4.meta.LastKey)
-	// This key would've been done already, we need the next one.
-	it.Next()
-}
-
 func (v4 *v4Migrator) flush(force bool) error {
 	v4.flushRemain--
 	if v4.flushRemain < 0 || force {
@@ -173,167 +163,325 @@ func (v4 *v4Migrator) flush(force bool) error {
 	return nil
 }
 
-func (v4 *v4Migrator) migrateMeta(it *badger.Iterator) error {
-	v4.helper.ReportStatus("migrating storage roots and metadata")
-	for v4.seek(it); it.Valid(); it.Next() {
-		key := it.Item().Key()
+// This is only usable once rootsMetadataKeyFmt keys have been migrated!
+func (v4 *v4Migrator) getRootType(rh hash.Hash, version uint64) (node.RootType, error) {
+	root, err := v4.helper.GetRootForHash(rh, version)
+	if err == nil {
+		return root.Type, nil
+	}
 
-		var h1, h2 hash.Hash
-		var th1, th2 typedHash
-		var version uint64
+	// If not directly discoverable, try traversing finalized roots metadata.
+	meta, err := loadRootsMetadata(v4.readTxn, version)
+	if err != nil {
+		return node.RootTypeInvalid, err
+	}
 
-		switch {
-		case v3NodeKeyFmt.Decode(key, &h1):
-			// Tree nodes will be updated once we have all roots.
-			continue
-
-		case v3WriteLogKeyFmt.Decode(key, &version, &h1, &h2):
-			var val []byte
-			_ = it.Item().Value(func(data []byte) error {
-				val = data
-				return nil
-			})
-
-			r1, err := v4.helper.GetRootForHash(h1, version)
-			if err != nil {
-				return fmt.Errorf("mkvs/badger/migrate: error getting writelog root %v: %w", h1, err)
-			}
-			th1.FromParts(r1.Type, h1)
-			th2.FromParts(r1.Type, h2)
-
-			entry := badger.NewEntry(v4WriteLogKeyFmt.Encode(&version, &th1, &th2), val)
-			err = v4.changeBatch.SetEntryAt(entry, it.Item().Version())
-			if err != nil {
-				return fmt.Errorf("mkvs/badger/migrate: error setting updated writelog key: %w", err)
-			}
-			err = v4.changeBatch.DeleteAt(key, it.Item().Version())
-			if err != nil {
-				return fmt.Errorf("mkvs/badger/migrate: error removing old writelog key: %w", err)
-			}
-
-		case v3RootsMetadataKeyFmt.Decode(key, &version):
-			var rootsMeta v3RootsMetadata
-			err := it.Item().Value(func(data []byte) error {
-				return cbor.UnmarshalTrusted(data, &rootsMeta)
-			})
-			if err != nil {
-				return fmt.Errorf("mkvs/badger/migrate: error deserializing roots metadata: %w", err)
-			}
-
-			var newRoots v4RootsMetadata
-			newRoots.Roots = map[typedHash][]typedHash{}
-			for k, v := range rootsMeta.Roots {
-				arr := make([]typedHash, 0, len(v))
-				var root node.Root
-				for _, r := range v {
-					root, err = v4.helper.GetRootForHash(r, version)
-					if err != nil {
-						return fmt.Errorf("mkvs/badger/migrate: error getting root for %v: %w", r, err)
-					}
-					th := typedHashFromRoot(root)
-					v4.meta.Roots[th] = true
-					arr = append(arr, th)
-				}
-				root, err = v4.helper.GetRootForHash(k, version)
-				if err != nil {
-					return fmt.Errorf("mkvs/badger/migrate: error getting root for %v: %w", k, err)
-				}
-				th := typedHashFromRoot(root)
-				v4.meta.Roots[th] = true
-				newRoots.Roots[th] = arr
-			}
-
-			entry := badger.NewEntry(v4RootsMetadataKeyFmt.Encode(&version), cbor.Marshal(newRoots))
-			err = v4.changeBatch.SetEntryAt(entry, it.Item().Version())
-			if err != nil {
-				return fmt.Errorf("mkvs/badger/migrate: error storing updated root metadata: %w", err)
-			}
-			err = v4.changeBatch.DeleteAt(key, it.Item().Version())
-			if err != nil {
-				return fmt.Errorf("mkvs/badger/migrate: error removing old root metadata: %w", err)
-			}
-
-		case v3RootUpdatedNodesKeyFmt.Decode(key, &version, &h1):
-			var oldUpdatedNodes []v3UpdatedNode
-			err := it.Item().Value(func(data []byte) error {
-				return cbor.UnmarshalTrusted(data, &oldUpdatedNodes)
-			})
-			if err != nil {
-				return fmt.Errorf("mkvs/badger/migrate: error decoding updated nodes list for root %v:%v: %w", h1, version, err)
-			}
-
-			root, err := v4.helper.GetRootForHash(h1, version)
-			if err != nil {
-				return fmt.Errorf("mkvs/badger/migrate: error getting root %v:%v for updated nodes list: %w", h1, version, err)
-			}
-			v4.meta.Roots[typedHashFromRoot(root)] = true
-
-			newUpdatedNodes := make([]v4UpdatedNode, 0, len(oldUpdatedNodes))
-			for _, up := range oldUpdatedNodes {
-				newUpdatedNodes = append(newUpdatedNodes, v4UpdatedNode{
-					Removed: up.Removed,
-					Hash:    typedHashFromParts(root.Type, up.Hash),
-				})
-			}
-
-			th := typedHashFromRoot(root)
-			entry := badger.NewEntry(
-				v4RootUpdatedNodesKeyFmt.Encode(version, &th),
-				cbor.Marshal(newUpdatedNodes),
-			)
-			err = v4.changeBatch.SetEntryAt(entry, it.Item().Version())
-			if err != nil {
-				return fmt.Errorf("mkvs/badger/migrate: error storing updated nodes list for root %v: %w", root, err)
-			}
-			err = v4.changeBatch.DeleteAt(key, it.Item().Version())
-			if err != nil {
-				return fmt.Errorf("mkvs/badger/migrate: error deleting old nodes nodes list for root %v: %w", root, err)
-			}
-
-		case v3MetadataKeyFmt.Decode(key):
-			var meta3 v3SerializedMetadata
-			err := it.Item().Value(func(data []byte) error {
-				return cbor.UnmarshalTrusted(data, &meta3)
-			})
-			if err != nil {
-				return fmt.Errorf("mkvs/badger/migrate: error decoding database metadata: %w", err)
-			}
-
-			var meta4 v4SerializedMetadata
-			meta4 = meta3
-			meta4.Version = 4
-
-			entry := badger.NewEntry(
-				v4MetadataKeyFmt.Encode(),
-				cbor.Marshal(meta4),
-			)
-			err = v4.changeBatch.SetEntryAt(entry, it.Item().Version())
-			if err != nil {
-				return fmt.Errorf("mkvs/badger/migrate: error storing updated database metadata: %w", err)
-			}
-
-		case v3MultipartRestoreNodeLogKeyFmt.Decode(key, &h1):
-			// Tree nodes will be updated once we have all roots.
-			continue
+	for root, chain := range meta.Roots {
+		h := root.Hash()
+		if h.Equal(&rh) {
+			return root.Type(), nil
 		}
-
-		v4.meta.CurrentMetaCount++
-		v4.helper.ReportProgress("updated keys", v4.meta.CurrentMetaCount, v4.meta.MetaCount)
-		v4.meta.LastKey = it.Item().Key()
-		if err := v4.meta.save(v4.changeBatch); err != nil {
-			return fmt.Errorf("mkvs/badger/migrate: error saving migration metadata: %w", err)
+		for _, droot := range chain {
+			h := droot.Hash()
+			if h.Equal(&rh) {
+				return droot.Type(), nil
+			}
 		}
+	}
 
-		// Save progress.
-		if err := v4.flush(false); err != nil {
-			return err
-		}
+	return node.RootTypeInvalid, fmt.Errorf("mkvs/badger/migrate: root %v not found in block roots or finalized version metadata", rh)
+}
+
+func (v4 *v4Migrator) keyMetadata(item *badger.Item) error {
+	var meta3 v3SerializedMetadata
+	err := item.Value(func(data []byte) error {
+		return cbor.UnmarshalTrusted(data, &meta3)
+	})
+	if err != nil {
+		return fmt.Errorf("mkvs/badger/migrate: error decoding database metadata: %w", err)
+	}
+
+	var meta4 v4SerializedMetadata
+	meta4 = meta3
+	meta4.Version = 4
+
+	entry := badger.NewEntry(
+		v4MetadataKeyFmt.Encode(),
+		cbor.Marshal(meta4),
+	)
+	err = v4.changeBatch.SetEntryAt(entry, item.Version())
+	if err != nil {
+		return fmt.Errorf("mkvs/badger/migrate: error storing updated database metadata: %w", err)
 	}
 
 	return nil
 }
 
-func (v4 *v4Migrator) migrateTree(it *badger.Iterator) error {
+func (v4 *v4Migrator) keyRootsMetadata(item *badger.Item) error {
+	var version uint64
+	if !v3RootsMetadataKeyFmt.Decode(item.Key(), &version) {
+		return fmt.Errorf("mkvs/badger/migrate: error decoding roots metadata key")
+	}
+
+	var rootsMeta v3RootsMetadata
+	err := item.Value(func(data []byte) error {
+		return cbor.UnmarshalTrusted(data, &rootsMeta)
+	})
+	if err != nil {
+		return fmt.Errorf("mkvs/badger/migrate: error deserializing roots metadata: %w", err)
+	}
+
+	// Propagate type information throughout the derived root chains.
+	plainRoots := map[hash.Hash]node.RootType{}
+	for root, chain := range rootsMeta.Roots {
+		plainRoots[root] = node.RootTypeInvalid
+		for _, droot := range chain {
+			plainRoots[droot] = node.RootTypeInvalid
+		}
+	}
+
+	remaining := len(plainRoots)
+	for root, typ := range plainRoots {
+		if typ != node.RootTypeInvalid {
+			continue
+		}
+		full, err := v4.helper.GetRootForHash(root, version)
+		if err == nil {
+			plainRoots[root] = full.Type
+			remaining--
+		}
+	}
+
+	for remaining > 0 {
+		preLoop := remaining
+		for root, chain := range rootsMeta.Roots {
+			typ := node.RootTypeInvalid
+			all := append([]hash.Hash{root}, chain...)
+			for _, droot := range all {
+				if dtype, ok := plainRoots[droot]; ok && dtype != node.RootTypeInvalid {
+					typ = dtype
+					break
+				}
+			}
+
+			if typ != node.RootTypeInvalid {
+				for _, root := range all {
+					if plainRoots[root] == node.RootTypeInvalid {
+						plainRoots[root] = typ
+						remaining--
+					}
+				}
+			}
+		}
+
+		if remaining == preLoop {
+			for r, t := range plainRoots {
+				fmt.Printf("plainroot %v has type %v\n", r, t)
+			}
+			fmt.Printf("full roots struct is %v\n", rootsMeta.Roots)
+			return fmt.Errorf("mkvs/badger/migrate: can't convert roots metadata for version %d: not all types found", version)
+		}
+	}
+
+	// Build new roots structure.
+	var newRoots v4RootsMetadata
+	newRoots.Roots = map[typedHash][]typedHash{}
+	for root, chain := range rootsMeta.Roots {
+		arr := make([]typedHash, 0, len(chain))
+		for _, droot := range chain {
+			th := typedHashFromParts(plainRoots[droot], droot)
+			v4.meta.Roots[th] = true
+			arr = append(arr, th)
+		}
+		th := typedHashFromParts(plainRoots[root], root)
+		v4.meta.Roots[th] = true
+		newRoots.Roots[th] = arr
+	}
+
+	entry := badger.NewEntry(v4RootsMetadataKeyFmt.Encode(&version), cbor.Marshal(newRoots))
+	err = v4.changeBatch.SetEntryAt(entry, item.Version())
+	if err != nil {
+		return fmt.Errorf("mkvs/badger/migrate: error storing updated root metadata: %w", err)
+	}
+	err = v4.changeBatch.DeleteAt(item.Key(), item.Version())
+	if err != nil {
+		return fmt.Errorf("mkvs/badger/migrate: error removing old root metadata: %w", err)
+	}
+
+	return nil
+}
+
+func (v4 *v4Migrator) keyWriteLog(item *badger.Item) error {
+	var version uint64
+	var h1, h2 hash.Hash
+	var th1, th2 typedHash
+	if !v3WriteLogKeyFmt.Decode(item.Key(), &version, &h1, &h2) {
+		return fmt.Errorf("mkvs/badger/migrate: error decoding writelog key")
+	}
+
+	var val []byte
+	_ = item.Value(func(data []byte) error {
+		val = data
+		return nil
+	})
+
+	t1, err := v4.getRootType(h1, version)
+	if err != nil {
+		return fmt.Errorf("mkvs/badger/migrate: error getting type for writelog root %v: %w", h1, err)
+	}
+	th1.FromParts(t1, h1)
+	th2.FromParts(t1, h2)
+
+	entry := badger.NewEntry(v4WriteLogKeyFmt.Encode(&version, &th1, &th2), val)
+	err = v4.changeBatch.SetEntryAt(entry, item.Version())
+	if err != nil {
+		return fmt.Errorf("mkvs/badger/migrate: error setting updated writelog key: %w", err)
+	}
+	err = v4.changeBatch.DeleteAt(item.Key(), item.Version())
+	if err != nil {
+		return fmt.Errorf("mkvs/badger/migrate: error removing old writelog key: %w", err)
+	}
+
+	return nil
+}
+
+func (v4 *v4Migrator) keyRootUpdatedNodes(item *badger.Item) error {
+	fmt.Println("running roots metadata migrator")
+	var version uint64
+	var h1 hash.Hash
+	if !v3RootUpdatedNodesKeyFmt.Decode(item.Key(), &version, &h1) {
+		return fmt.Errorf("mkvs/badger/migrate: error decoding root updated nodes key")
+	}
+
+	var oldUpdatedNodes []v3UpdatedNode
+	err := item.Value(func(data []byte) error {
+		return cbor.UnmarshalTrusted(data, &oldUpdatedNodes)
+	})
+	if err != nil {
+		return fmt.Errorf("mkvs/badger/migrate: error decoding updated nodes list for root %v:%v: %w", h1, version, err)
+	}
+
+	typ, err := v4.getRootType(h1, version)
+	if err != nil {
+		return fmt.Errorf("mkvs/badger/migrate: error getting root %v:%v for updated nodes list: %w", h1, version, err)
+	}
+	th := typedHashFromParts(typ, h1)
+	v4.meta.Roots[th] = true
+
+	newUpdatedNodes := make([]v4UpdatedNode, 0, len(oldUpdatedNodes))
+	for _, up := range oldUpdatedNodes {
+		newUpdatedNodes = append(newUpdatedNodes, v4UpdatedNode{
+			Removed: up.Removed,
+			Hash:    typedHashFromParts(typ, up.Hash),
+		})
+	}
+
+	entry := badger.NewEntry(
+		v4RootUpdatedNodesKeyFmt.Encode(version, &th),
+		cbor.Marshal(newUpdatedNodes),
+	)
+	err = v4.changeBatch.SetEntryAt(entry, item.Version())
+	if err != nil {
+		return fmt.Errorf("mkvs/badger/migrate: error storing updated nodes list for root %v: %w", th, err)
+	}
+	err = v4.changeBatch.DeleteAt(item.Key(), item.Version())
+	if err != nil {
+		return fmt.Errorf("mkvs/badger/migrate: error deleting old nodes nodes list for root %v: %w", th, err)
+	}
+
+	return nil
+}
+
+func (v4 *v4Migrator) migrateMeta() error {
+	v4.helper.ReportStatus("migrating storage roots and metadata")
+
+	keyOrder := []byte{
+		v3MetadataKeyFmt.Prefix(),
+		v3RootsMetadataKeyFmt.Prefix(),
+		v3WriteLogKeyFmt.Prefix(),
+		v3RootUpdatedNodesKeyFmt.Prefix(),
+		// nodeKeyFmt and multipartRestoreNodeLogKeyFmt keys
+		// will be migrated during tree node migration.
+	}
+	skipFirst := true
+	if len(v4.meta.LastKey) == 0 {
+		v4.meta.LastKey = []byte{keyOrder[0]}
+		// LastKey records the last _already processed_ key, so
+		// if we're only just starting up, the first key we see
+		// won't have been processed yet.
+		skipFirst = false
+	}
+
+	keyNexts := map[byte]byte{}
+	for i := 0; i < len(keyOrder)-1; i++ {
+		keyNexts[keyOrder[i]] = keyOrder[i+1]
+	}
+
+	keyFuncs := map[byte]func(item *badger.Item)error{
+		v3MetadataKeyFmt.Prefix(): v4.keyMetadata,
+		v3RootsMetadataKeyFmt.Prefix(): v4.keyRootsMetadata,
+		v3WriteLogKeyFmt.Prefix(): v4.keyWriteLog,
+		v3RootUpdatedNodesKeyFmt.Prefix(): v4.keyRootUpdatedNodes,
+	}
+
+	it := v4.readTxn.NewIterator(badger.DefaultIteratorOptions)
+	defer func() {
+		it.Close()
+	}()
+
+	currentKey := v4.meta.LastKey[0]
+	keyOk := true
+	for {
+		it.Rewind()
+		it.Seek(v4.meta.LastKey)
+		for ; it.Valid(); it.Next() {
+			if skipFirst {
+				skipFirst = false
+				continue
+			}
+			if it.Item().Key()[0] != currentKey {
+				break
+			}
+
+			if err := keyFuncs[currentKey](it.Item()); err != nil {
+				return err
+			}
+
+			v4.meta.CurrentMetaCount++
+			v4.helper.ReportProgress("updated keys", v4.meta.CurrentMetaCount, v4.meta.MetaCount)
+			v4.meta.LastKey = it.Item().KeyCopy(v4.meta.LastKey)
+			if err := v4.meta.save(v4.changeBatch); err != nil {
+				return fmt.Errorf("mkvs/badger/migrate: error saving migration metadata: %w", err)
+			}
+
+			// Save progress.
+			if err := v4.flush(false); err != nil {
+				return err
+			}
+		}
+
+		// Force flush everything.
+		if err := v4.flush(true); err != nil {
+			return err
+		}
+		it.Close()
+		v4.readTxn.Discard()
+		v4.readTxn = v4.db.db.NewTransactionAt(math.MaxUint64, false)
+		it = v4.readTxn.NewIterator(badger.DefaultIteratorOptions)
+
+		currentKey, keyOk = keyNexts[currentKey]
+		if !keyOk {
+			break
+		}
+		v4.meta.LastKey = []byte{currentKey}
+	}
+
+	return nil
+}
+
+func (v4 *v4Migrator) migrateTree() error {
+	it := v4.readTxn.NewIterator(badger.DefaultIteratorOptions)
+	defer it.Close()
 	v4.helper.ReportStatus("migrating tree nodes")
 
 	// Load all tree roots on the walk stack, if they're not there already.
@@ -452,7 +600,11 @@ func (v4 *v4Migrator) migrateTree(it *badger.Iterator) error {
 
 func (v4 *v4Migrator) Migrate() (rversion uint64, rerr error) {
 	v4.readTxn = v4.db.db.NewTransactionAt(math.MaxUint64, false)
-	defer v4.readTxn.Discard()
+	defer func() {
+		// readTxn will change throughout the process, don't
+		// bind the defer to a particular instance.
+		v4.readTxn.Discard()
+	}()
 	v4.changeBatch = v4.db.db.NewWriteBatchAt(tsMetadata)
 	defer func() {
 		// changeBatch will change throughout the process, don't
@@ -467,33 +619,36 @@ func (v4 *v4Migrator) Migrate() (rversion uint64, rerr error) {
 	}
 	v4.meta.BaseDBVersion = 3
 
-	it := v4.readTxn.NewIterator(badger.DefaultIteratorOptions)
-	defer it.Close()
 
 	// Count keys first, so we can report some sensible progress to the user.
 	// Badger says this should be fast.
-	v4.helper.ReportStatus("scanning database")
 	if !v4.meta.InitComplete {
+		v4.helper.ReportStatus("scanning database")
 		v4.meta.TreeCount = 0
 		v4.meta.MetaCount = 0
-		for it.Rewind(); it.Valid(); it.Next() {
-			prefix := it.Item().Key()[0]
-			if prefix == v3NodeKeyFmt.Prefix() || prefix == v3MultipartRestoreNodeLogKeyFmt.Prefix() {
-				v4.meta.TreeCount++
-			} else {
-				v4.meta.MetaCount++
+		func() {
+			it := v4.readTxn.NewIterator(badger.DefaultIteratorOptions)
+			defer it.Close()
+			for it.Rewind(); it.Valid(); it.Next() {
+				prefix := it.Item().Key()[0]
+				if prefix == v3NodeKeyFmt.Prefix() || prefix == v3MultipartRestoreNodeLogKeyFmt.Prefix() {
+					v4.meta.TreeCount++
+				} else {
+					v4.meta.MetaCount++
+				}
 			}
-		}
+		}()
 		v4.meta.InitComplete = true
 		if err := v4.meta.save(v4.changeBatch); err != nil {
 			return 0, err
 		}
+		v4.helper.ReportStatus(fmt.Sprintf("%v meta keys, %v tree keys", v4.meta.MetaCount, v4.meta.TreeCount))
 	}
 
 	// Migrate!
 
 	if !v4.meta.MetaComplete {
-		if err := v4.migrateMeta(it); err != nil {
+		if err := v4.migrateMeta(); err != nil {
 			return 0, err
 		}
 		v4.meta.MetaComplete = true
@@ -506,7 +661,7 @@ func (v4 *v4Migrator) Migrate() (rversion uint64, rerr error) {
 	}
 
 	if !v4.meta.TreeComplete {
-		if err := v4.migrateTree(it); err != nil {
+		if err := v4.migrateTree(); err != nil {
 			return 0, fmt.Errorf("mkvs/badger/migrate: error walking node trees: %w", err)
 		}
 		v4.meta.TreeComplete = true
