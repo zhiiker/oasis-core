@@ -202,12 +202,12 @@ func (sc *serviceClient) GetPVSSState(ctx context.Context, height int64) (*beaco
 	return q.PVSSState(ctx)
 }
 
-func (sc *serviceClient) WatchLatestPVSSEvent() (<-chan *beaconAPI.PVSSEvent, *pubsub.Subscription) {
+func (sc *serviceClient) WatchLatestPVSSEvent(ctx context.Context) (<-chan *beaconAPI.PVSSEvent, *pubsub.Subscription, error) {
 	typedCh := make(chan *beaconAPI.PVSSEvent)
 	sub := sc.pvssNotifier.Subscribe()
 	sub.Unwrap(typedCh)
 
-	return typedCh, sub
+	return typedCh, sub, nil
 }
 
 func (sc *serviceClient) SetEpoch(ctx context.Context, epoch beaconAPI.EpochTime) error {
@@ -296,7 +296,7 @@ func (sc *serviceClient) DeliverEvent(ctx context.Context, height int64, tx tmty
 				sc.epochNotifier.Broadcast(epoch)
 			}
 		}
-		if bytes.Equal(pair.GetKey(), app.KeyPVSSRound) {
+		if tmAPI.IsAttributeKind(pair.GetKey(), &beaconAPI.PVSSEvent{}) {
 			var event beaconAPI.PVSSEvent
 			if err := cbor.Unmarshal(pair.GetValue(), &event); err != nil {
 				sc.logger.Error("beacon: malformed PVSS round",

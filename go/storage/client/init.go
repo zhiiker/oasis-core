@@ -9,6 +9,7 @@ import (
 	"github.com/oasisprotocol/oasis-core/go/common/identity"
 	"github.com/oasisprotocol/oasis-core/go/common/logging"
 	"github.com/oasisprotocol/oasis-core/go/common/node"
+	consensus "github.com/oasisprotocol/oasis-core/go/consensus/api"
 	registry "github.com/oasisprotocol/oasis-core/go/registry/api"
 	"github.com/oasisprotocol/oasis-core/go/runtime/nodes"
 	"github.com/oasisprotocol/oasis-core/go/runtime/nodes/grpc"
@@ -24,6 +25,7 @@ func NewForNodesClient(
 	ctx context.Context,
 	client grpc.NodesClient,
 	runtime registry.RuntimeDescriptorProvider,
+	opts ...Option,
 ) (api.Backend, error) {
 	b := &storageClientBackend{
 		ctx:         ctx,
@@ -31,6 +33,11 @@ func NewForNodesClient(
 		nodesClient: client,
 		runtime:     runtime,
 	}
+
+	for _, opt := range opts {
+		opt(b)
+	}
+
 	return api.NewMetricsWrapper(b), nil
 }
 
@@ -41,12 +48,13 @@ func NewForNodes(
 	ident *identity.Identity,
 	nodes nodes.NodeDescriptorLookup,
 	runtime registry.RuntimeDescriptorProvider,
+	opts ...Option,
 ) (api.Backend, error) {
 	client, err := grpc.NewNodesClient(ctx, nodes, grpc.WithClientAuthentication(ident))
 	if err != nil {
 		return nil, fmt.Errorf("storage/client: failed to create committee client: %w", err)
 	}
-	return NewForNodesClient(ctx, client, runtime)
+	return NewForNodesClient(ctx, client, runtime, opts...)
 }
 
 // NewForPublicStorage creates a new storage client that automatically follows a given runtime's storage nodes
@@ -55,12 +63,13 @@ func NewForPublicStorage(
 	ctx context.Context,
 	namespace common.Namespace,
 	ident *identity.Identity,
-	registryBackend registry.Backend,
+	consensus consensus.Backend,
 	runtime registry.RuntimeDescriptorProvider,
+	opts ...Option,
 ) (api.Backend, error) {
 	nl, err := nodes.NewRuntimeNodeLookup(
 		ctx,
-		registryBackend,
+		consensus,
 		namespace,
 	)
 	if err != nil {
@@ -76,7 +85,7 @@ func NewForPublicStorage(
 		),
 	)
 
-	return NewForNodes(ctx, ident, publicStorageNl, runtime)
+	return NewForNodes(ctx, ident, publicStorageNl, runtime, opts...)
 }
 
 // NewStatic creates a new storage client that only follows a specific storage node.
@@ -85,15 +94,16 @@ func NewForPublicStorage(
 func NewStatic(
 	ctx context.Context,
 	ident *identity.Identity,
-	registryBackend registry.Backend,
+	consensus consensus.Backend,
 	nodeID signature.PublicKey,
+	opts ...Option,
 ) (api.Backend, error) {
-	nw, err := nodes.NewVersionedNodeDescriptorWatcher(ctx, registryBackend)
+	nw, err := nodes.NewVersionedNodeDescriptorWatcher(ctx, consensus)
 	if err != nil {
 		return nil, fmt.Errorf("storage/client: failed to create node descriptor watcher: %w", err)
 	}
 
-	client, err := NewForNodes(ctx, ident, nw, nil)
+	client, err := NewForNodes(ctx, ident, nw, nil, opts...)
 	if err != nil {
 		return nil, err
 	}

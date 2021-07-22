@@ -120,6 +120,10 @@ func (s *applicationState) Storage() storage.LocalBackend {
 	return s.storage
 }
 
+func (s *applicationState) Checkpointer() checkpoint.Checkpointer {
+	return s.checkpointer
+}
+
 func (s *applicationState) InitialHeight() int64 {
 	return int64(s.initialHeight)
 }
@@ -572,9 +576,10 @@ func newApplicationState(ctx context.Context, upgrader upgrade.Backend, cfg *App
 			GetParameters: func(ctx context.Context) (*checkpoint.CreationParameters, error) {
 				params := s.ConsensusParameters()
 				return &checkpoint.CreationParameters{
-					Interval:  params.StateCheckpointInterval,
-					NumKept:   params.StateCheckpointNumKept,
-					ChunkSize: params.StateCheckpointChunkSize,
+					Interval:       params.StateCheckpointInterval,
+					NumKept:        params.StateCheckpointNumKept,
+					ChunkSize:      params.StateCheckpointChunkSize,
+					InitialVersion: cfg.InitialHeight,
 				}, nil
 			},
 		}

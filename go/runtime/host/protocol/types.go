@@ -21,6 +21,9 @@ import (
 	storage "github.com/oasisprotocol/oasis-core/go/storage/api"
 )
 
+// MethodQueryBatchWeightLimits is the name of the runtime batch weight limits query method.
+const MethodQueryBatchWeightLimits = "internal.BatchWeightLimits"
+
 // NOTE: Bump RuntimeProtocol version in go/common/version if you
 //       change any of the structures below.
 
@@ -55,7 +58,6 @@ type Message struct {
 	ID          uint64      `json:"id"`
 	MessageType MessageType `json:"message_type"`
 	Body        Body        `json:"body"`
-	SpanContext []byte      `json:"span_context"`
 }
 
 // Body is a protocol message body.
@@ -139,6 +141,12 @@ type RuntimeInfoRequest struct {
 	ConsensusProtocolVersion version.Version `json:"consensus_protocol_version"`
 	// ConsensusChainContext is the consensus layer chain domain separation context.
 	ConsensusChainContext string `json:"consensus_chain_context"`
+
+	// LocalConfig is the node-local runtime configuration.
+	//
+	// This configuration must not be used in any context which requires determinism across
+	// replicated runtime instances.
+	LocalConfig map[string]interface{} `json:"local_config,omitempty"`
 }
 
 // RuntimeInfoResponse is a worker info response message body.
@@ -221,7 +229,7 @@ type CheckTxMetadata struct {
 	Priority uint64 `json:"priority,omitempty"`
 
 	// Weight are runtime specific transaction weights.
-	Weights map[string]uint64 `json:"weights,omitempty"`
+	Weights map[transaction.Weight]uint64 `json:"weights,omitempty"`
 }
 
 // IsSuccess returns true if transaction execution was successful.
@@ -293,7 +301,8 @@ type RuntimeExecuteTxBatchRequest struct {
 
 // RuntimeExecuteTxBatchResponse is a worker execute tx batch response message body.
 type RuntimeExecuteTxBatchResponse struct {
-	Batch ComputedBatch `json:"batch"`
+	Batch             ComputedBatch                 `json:"batch"`
+	BatchWeightLimits map[transaction.Weight]uint64 `json:"batch_weight_limits"`
 }
 
 // RuntimeKeyManagerPolicyUpdateRequest is a runtime key manager policy request

@@ -1,6 +1,6 @@
 //! Runtime transaction batch dispatcher.
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -8,7 +8,6 @@ use std::{
 };
 
 use anyhow::{Context as AnyContext, Result as AnyResult};
-use serde::{de::DeserializeOwned, Serialize};
 use thiserror::Error;
 
 use super::{
@@ -17,9 +16,9 @@ use super::{
     types::{TxnBatch, TxnCall, TxnCheckResult, TxnOutput},
 };
 use crate::{
-    common::{cbor, crypto::hash::Hash},
+    common::crypto::hash::Hash,
     consensus::roothash,
-    types::{CheckTxResult, Error as RuntimeError},
+    types::{CheckTxResult, Error as RuntimeError, TransactionWeight},
 };
 
 /// Runtime transaction dispatcher trait.
@@ -59,7 +58,11 @@ pub trait Dispatcher {
         _args: cbor::Value,
     ) -> Result<cbor::Value, RuntimeError> {
         // Default implementation returns an error.
-        Err(RuntimeError::new("dispatcher", 1, "query not supported"))
+        Err(RuntimeError::new(
+            "rhp/dispatcher",
+            2,
+            "query not supported",
+        ))
     }
 }
 
@@ -114,6 +117,9 @@ pub struct ExecuteBatchResult {
     pub messages: Vec<roothash::Message>,
     /// Block emitted tags (not emitted by a specific transaction).
     pub block_tags: Tags,
+    /// Batch weight limits valid for next round. This is used as a fast-path,
+    /// to avoid having the transaction scheduler query these on every round.
+    pub batch_weight_limits: Option<BTreeMap<TransactionWeight, u64>>,
 }
 
 /// No-op dispatcher.
@@ -138,6 +144,7 @@ impl Dispatcher for NoopDispatcher {
             results: Vec::new(),
             messages: Vec::new(),
             block_tags: Tags::new(),
+            batch_weight_limits: None,
         })
     }
 
@@ -266,8 +273,8 @@ struct MethodHandlerDispatchImpl<Call, Output> {
 
 impl<Call, Output> MethodHandlerDispatch for MethodHandlerDispatchImpl<Call, Output>
 where
-    Call: DeserializeOwned + 'static,
-    Output: Serialize + 'static,
+    Call: cbor::Decode + 'static,
+    Output: cbor::Encode + 'static,
 {
     fn get_descriptor(&self) -> &MethodDescriptor {
         &self.descriptor
@@ -292,8 +299,8 @@ impl Method {
     /// Create a new enclave method descriptor.
     pub fn new<Call, Output, Handler>(method: MethodDescriptor, handler: Handler) -> Self
     where
-        Call: DeserializeOwned + 'static,
-        Output: Serialize + 'static,
+        Call: cbor::Decode + 'static,
+        Output: cbor::Encode + 'static,
         Handler: MethodHandler<Call, Output> + 'static,
     {
         Method {
@@ -409,7 +416,7 @@ impl MethodDispatcher {
         };
 
         ExecuteTxResult {
-            output: cbor::to_vec(&rsp),
+            output: cbor::to_vec(rsp),
             tags: ctx.take_tags(),
         }
     }
@@ -451,7 +458,7 @@ impl Dispatcher for MethodDispatcher {
                 .map(|b| b.load(Ordering::SeqCst))
                 .unwrap_or(false)
             {
-                return Err(RuntimeError::new("dispatcher", 1, "batch aborted"));
+                return Err(RuntimeError::new("rhp/dispatcher", 1, "batch aborted"));
             }
             results.push(self.dispatch_check(call, &mut ctx));
             let _ = ctx.take_tags();
@@ -483,7 +490,7 @@ impl Dispatcher for MethodDispatcher {
                 .map(|b| b.load(Ordering::SeqCst))
                 .unwrap_or(false)
             {
-                return Err(RuntimeError::new("dispatcher", 1, "batch aborted"));
+                return Err(RuntimeError::new("rhp/dispatcher", 1, "batch aborted"));
             }
             results.push(self.dispatch_execute(call, &mut ctx));
         }
@@ -498,6 +505,8 @@ impl Dispatcher for MethodDispatcher {
             messages: ctx.close(),
             // No support for block tags in the deprecated dispatcher.
             block_tags: Tags::new(),
+            // No support for custom batch weight limits.
+            batch_weight_limits: None,
         })
     }
 
@@ -516,10 +525,8 @@ impl Dispatcher for MethodDispatcher {
 #[cfg(test)]
 mod tests {
     use io_context::Context as IoContext;
-    use serde::{Deserialize, Serialize};
 
     use crate::{
-        common::cbor,
         consensus::{roothash::Header, state::ConsensusState},
         storage::mkvs::{sync::NoopReadSyncer, RootType, Tree},
     };
@@ -528,7 +535,7 @@ mod tests {
 
     const TEST_TIMESTAMP: u64 = 0xcafedeadbeefc0de;
 
-    #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Debug, Eq, PartialEq, cbor::Encode, cbor::Decode)]
     struct Complex {
         text: String,
         number: u32,
@@ -574,7 +581,7 @@ mod tests {
                 number: 21,
             }),
         };
-        let call_encoded = cbor::to_vec(&call);
+        let call_encoded = cbor::to_vec(call);
 
         let header = Header {
             timestamp: TEST_TIMESTAMP,

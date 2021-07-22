@@ -22,7 +22,6 @@ import (
 	"github.com/oasisprotocol/oasis-core/go/roothash/api/block"
 	"github.com/oasisprotocol/oasis-core/go/runtime/client/api"
 	enclaverpc "github.com/oasisprotocol/oasis-core/go/runtime/enclaverpc/api"
-	"github.com/oasisprotocol/oasis-core/go/runtime/host"
 	runtimeRegistry "github.com/oasisprotocol/oasis-core/go/runtime/registry"
 	"github.com/oasisprotocol/oasis-core/go/runtime/tagindexer"
 	"github.com/oasisprotocol/oasis-core/go/runtime/transaction"
@@ -198,15 +197,15 @@ func (c *runtimeClient) CheckTx(ctx context.Context, request *api.CheckTxRequest
 		return fmt.Errorf("client: failed to get current epoch: %w", err)
 	}
 
-	_, err = rt.CheckTx(ctx, rs.CurrentBlock, lb, epoch, request.Data)
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, host.ErrCheckTxFailed):
-		return errors.WithContext(api.ErrCheckTxFailed, errors.Context(err))
-	default:
+	resp, err := rt.CheckTx(ctx, rs.CurrentBlock, lb, epoch, transaction.RawBatch{request.Data})
+	if err != nil {
 		return fmt.Errorf("client: local transaction check failed: %w", err)
 	}
+	if !resp[0].IsSuccess() {
+		return errors.WithContext(api.ErrCheckTxFailed, resp[0].Error.String())
+	}
+
+	return nil
 }
 
 // Implements api.RuntimeClient.
@@ -550,7 +549,7 @@ func (c *runtimeClient) CallEnclave(ctx context.Context, request *enclaverpc.Cal
 		if km = c.kmClients[rt.ID()]; km == nil {
 			c.logger.Debug("creating new key manager client instance")
 
-			km, err = keymanager.New(c.common.ctx, rt, c.common.consensus.KeyManager(), c.common.consensus.Registry(), nil)
+			km, err = keymanager.New(c.common.ctx, rt, c.common.consensus, nil)
 			if err != nil {
 				c.Unlock()
 				c.logger.Error("failed to create key manager client instance",

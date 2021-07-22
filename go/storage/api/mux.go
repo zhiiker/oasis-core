@@ -10,7 +10,8 @@ import (
 )
 
 // ErrMuxDontContinue is the error that should be returned by the MuxController function
-// when an operation was successful, but the muxer shouldn't continue with other backends.
+// when an operation was successful, but the muxer shouldn't continue with other backends and
+// should return an overall success.
 var ErrMuxDontContinue = errors.New("dontcontinue")
 
 // MuxContinueWithError is an error type that can be returned by the MuxController function
@@ -24,6 +25,9 @@ type MuxContinueWithError struct {
 }
 
 func (e MuxContinueWithError) Error() string {
+	if e.wrapped == nil {
+		return "<nil>"
+	}
 	return e.wrapped.Error()
 }
 
@@ -64,13 +68,18 @@ func MuxReadOpFinishEarly(next MuxController) MuxController {
 	}
 }
 
-// MuxIterateIgnoringErrors creates a controller that tells the muxer to continue iterating through
-// its backends even if one returns an error. The errors are stored and the last one is returned
-// at the end.
-func MuxIterateIgnoringErrors() MuxController {
+// MuxIterateIgnoringLocalErrors creates a controller that tells the muxer to continue iterating
+// through its backends even if a local one returns an error.
+func MuxIterateIgnoringLocalErrors() MuxController {
 	return func(i int, backend Backend, meth string, resp interface{}, err error) (interface{}, error) {
+		// Non-local errors are propagated as-is and abort processing.
+		if _, ok := backend.(LocalBackend); !ok {
+			return resp, err
+		}
+
+		// Error in a local backend is ignored.
 		if err != nil {
-			return resp, &MuxContinueWithError{err}
+			return resp, &MuxContinueWithError{nil}
 		}
 		return resp, nil
 	}
@@ -104,7 +113,7 @@ func (s *storageMux) doDouble(meth string, call func(Backend) (interface{}, erro
 			newErr = nil
 		}
 		if newErr == ErrMuxDontContinue {
-			return lastResp, residual
+			return lastResp, nil
 		}
 		if newErr != nil {
 			return lastResp, newErr

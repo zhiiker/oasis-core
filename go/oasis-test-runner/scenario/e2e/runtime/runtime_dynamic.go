@@ -8,7 +8,6 @@ import (
 
 	beacon "github.com/oasisprotocol/oasis-core/go/beacon/api"
 	"github.com/oasisprotocol/oasis-core/go/common"
-	"github.com/oasisprotocol/oasis-core/go/common/cbor"
 	"github.com/oasisprotocol/oasis-core/go/common/crypto/signature"
 	"github.com/oasisprotocol/oasis-core/go/common/quantity"
 	"github.com/oasisprotocol/oasis-core/go/common/sgx"
@@ -40,7 +39,7 @@ type runtimeDynamicImpl struct {
 
 func newRuntimeDynamicImpl() scenario.Scenario {
 	return &runtimeDynamicImpl{
-		runtimeImpl: *newRuntimeImpl("runtime-dynamic", "", nil),
+		runtimeImpl: *newRuntimeImpl("runtime-dynamic", nil),
 	}
 }
 
@@ -71,8 +70,6 @@ func (sc *runtimeDynamicImpl) Fixture() (*oasis.NetworkFixture, error) {
 			},
 		},
 	}
-	// We need IAS proxy to use the registry as we are registering runtimes dynamically.
-	f.Network.IAS.UseRegistry = true
 	// Avoid unexpected blocks.
 	f.Network.SetMockEpoch()
 	// Exclude all runtimes from genesis as we will register those dynamically.
@@ -266,20 +263,14 @@ func (sc *runtimeDynamicImpl) Run(childEnv *env.Env) error { // nolint: gocyclo
 
 		if i == 0 {
 			sc.Logger.Info("checking if genesis state has been initialized")
-			var rawRsp cbor.RawMessage
-			var err error
-			if rawRsp, err = sc.submitRuntimeTx(ctx, runtimeID, "get", struct {
-				Key   string `json:"key"`
-				Nonce uint64 `json:"nonce"`
-			}{
-				Key:   runtimeDynamicTestKey,
-				Nonce: 1234567890,
-			}); err != nil {
-				return fmt.Errorf("failed to submit get tx to runtime: %w", err)
-			}
-			var rsp string
-			if err = cbor.Unmarshal(rawRsp, &rsp); err != nil {
-				return fmt.Errorf("failed to unmarshal response from runtime: %w", err)
+			rsp, err := sc.submitKeyValueRuntimeGetTx(
+				ctx,
+				runtimeID,
+				runtimeDynamicTestKey,
+				1234567890,
+			)
+			if err != nil {
+				return err
 			}
 			if rsp != runtimeDynamicTestValue {
 				return fmt.Errorf("incorrect value returned by runtime: %s", rsp)
@@ -290,7 +281,7 @@ func (sc *runtimeDynamicImpl) Run(childEnv *env.Env) error { // nolint: gocyclo
 		sc.Logger.Info("submitting transaction to runtime",
 			"seq", i,
 		)
-		if err := sc.submitKeyValueRuntimeInsertTx(ctx, runtimeID, "hello", fmt.Sprintf("world %d", i)); err != nil {
+		if _, err := sc.submitKeyValueRuntimeInsertTx(ctx, runtimeID, "hello", fmt.Sprintf("world %d", i), 0); err != nil {
 			return err
 		}
 	}
@@ -379,7 +370,7 @@ func (sc *runtimeDynamicImpl) Run(childEnv *env.Env) error { // nolint: gocyclo
 
 	// Submit a runtime transaction to check whether the runtimes got resumed.
 	sc.Logger.Info("submitting transaction to runtime")
-	if err = sc.submitKeyValueRuntimeInsertTx(ctx, runtimeID, "hello", "final world"); err != nil {
+	if _, err = sc.submitKeyValueRuntimeInsertTx(ctx, runtimeID, "hello", "final world", 0); err != nil {
 		return err
 	}
 
@@ -537,7 +528,7 @@ func (sc *runtimeDynamicImpl) Run(childEnv *env.Env) error { // nolint: gocyclo
 
 	// Submit a runtime transaction to check whether the runtimes got resumed.
 	sc.Logger.Info("submitting transaction to runtime")
-	if err = sc.submitKeyValueRuntimeInsertTx(ctx, runtimeID, "hello", "final world for sure"); err != nil {
+	if _, err = sc.submitKeyValueRuntimeInsertTx(ctx, runtimeID, "hello", "final world for sure", 0); err != nil {
 		return err
 	}
 

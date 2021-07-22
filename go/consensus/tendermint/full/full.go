@@ -72,6 +72,7 @@ import (
 	roothashAPI "github.com/oasisprotocol/oasis-core/go/roothash/api"
 	schedulerAPI "github.com/oasisprotocol/oasis-core/go/scheduler/api"
 	stakingAPI "github.com/oasisprotocol/oasis-core/go/staking/api"
+	"github.com/oasisprotocol/oasis-core/go/storage/mkvs/checkpoint"
 	upgradeAPI "github.com/oasisprotocol/oasis-core/go/upgrade/api"
 )
 
@@ -316,6 +317,10 @@ func (t *fullService) GetAddresses() ([]node.ConsensusAddress, error) {
 	addr.ID = t.identity.P2PSigner.Public()
 
 	return []node.ConsensusAddress{addr}, nil
+}
+
+func (t *fullService) Checkpointer() checkpoint.Checkpointer {
+	return t.mux.State().Checkpointer()
 }
 
 func (t *fullService) StateToGenesis(ctx context.Context, blockHeight int64) (*genesisAPI.Document, error) {
@@ -830,11 +835,13 @@ func (t *fullService) GetStatus(ctx context.Context) (*consensusAPI.Status, erro
 		}
 		vals, err := t.stateStore.LoadValidators(valSetHeight)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load validator set: %w", err)
+			// Failed to load validator set.
+			status.IsValidator = false
+		} else {
+			consensusPk := t.identity.ConsensusSigner.Public()
+			consensusAddr := []byte(crypto.PublicKeyToTendermint(&consensusPk).Address())
+			status.IsValidator = vals.HasAddress(consensusAddr)
 		}
-		consensusPk := t.identity.ConsensusSigner.Public()
-		consensusAddr := []byte(crypto.PublicKeyToTendermint(&consensusPk).Address())
-		status.IsValidator = vals.HasAddress(consensusAddr)
 	}
 
 	return status, nil
@@ -999,7 +1006,10 @@ func (t *fullService) initialize() error {
 }
 
 func (t *fullService) GetLastRetainedVersion(ctx context.Context) (int64, error) {
-	return t.mux.State().LastRetainedVersion()
+	if err := t.ensureStarted(ctx); err != nil {
+		return -1, err
+	}
+	return t.node.BlockStore().Base(), nil
 }
 
 func (t *fullService) heightToTendermintHeight(height int64) (int64, error) {

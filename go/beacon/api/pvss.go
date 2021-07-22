@@ -121,6 +121,11 @@ type PVSSEvent struct {
 	Participants []signature.PublicKey `json:"participants,omitempty"`
 }
 
+// EventKind returns a string representation of this event's kind.
+func (ev *PVSSEvent) EventKind() string {
+	return "pvss_round"
+}
+
 func (ev *PVSSEvent) FromState(state *PVSSState) {
 	ev.Height = state.Height
 	ev.Epoch = state.Epoch
@@ -145,5 +150,5 @@ type PVSSBackend interface {
 	// from the channel, old events are overwritten.
 	//
 	// Upon subscription the current round event is sent immediately.
-	WatchLatestPVSSEvent() (<-chan *PVSSEvent, *pubsub.Subscription)
+	WatchLatestPVSSEvent(ctx context.Context) (<-chan *PVSSEvent, *pubsub.Subscription, error)
 }

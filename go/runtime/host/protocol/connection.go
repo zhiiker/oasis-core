@@ -8,15 +8,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/opentracing/opentracing-go"
-	opentracingExt "github.com/opentracing/opentracing-go/ext"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/oasisprotocol/oasis-core/go/common"
 	"github.com/oasisprotocol/oasis-core/go/common/cbor"
 	"github.com/oasisprotocol/oasis-core/go/common/errors"
 	"github.com/oasisprotocol/oasis-core/go/common/logging"
-	"github.com/oasisprotocol/oasis-core/go/common/tracing"
 	"github.com/oasisprotocol/oasis-core/go/common/version"
 	"github.com/oasisprotocol/oasis-core/go/oasis-node/cmd/common/metrics"
 )
@@ -27,8 +24,8 @@ const (
 	connWriteTimeout = 5 * time.Second
 )
 
-// ErrNotReady is the error reported when the Runtime Host Protocol is not initialized.
 var (
+	// ErrNotReady is the error reported when the Runtime Host Protocol is not initialized.
 	ErrNotReady = errors.New(moduleName, 1, "rhp: not ready")
 
 	rhpLatency = prometheus.NewSummaryVec(
@@ -124,6 +121,30 @@ type HostInfo struct {
 	ConsensusProtocolVersion version.Version
 	// ConsensusChainContext is the consensus layer chain domain separation context.
 	ConsensusChainContext string
+
+	// LocalConfig is the node-local runtime configuration.
+	//
+	// This configuration must not be used in any context which requires determinism across
+	// replicated runtime instances.
+	LocalConfig map[string]interface{}
+}
+
+// Clone returns a copy of the HostInfo structure.
+func (hi *HostInfo) Clone() *HostInfo {
+	var localConfig map[string]interface{}
+	if hi.LocalConfig != nil {
+		localConfig = make(map[string]interface{})
+		for k, v := range hi.LocalConfig {
+			localConfig[k] = v
+		}
+	}
+
+	return &HostInfo{
+		ConsensusBackend:         hi.ConsensusBackend,
+		ConsensusProtocolVersion: hi.ConsensusProtocolVersion,
+		ConsensusChainContext:    hi.ConsensusChainContext,
+		LocalConfig:              localConfig,
+	}
 }
 
 // state is the connection state.
@@ -290,23 +311,10 @@ func (c *connection) makeRequest(ctx context.Context, body *Body) (<-chan *Body,
 	c.pendingRequests[id] = ch
 	c.Unlock()
 
-	span := opentracing.SpanFromContext(ctx)
-	scBinary := []byte{}
-	var err error
-	if span != nil {
-		scBinary, err = tracing.SpanContextToBinary(span.Context())
-		if err != nil {
-			c.logger.Error("error while marshalling span context",
-				"err", err,
-			)
-		}
-	}
-
 	msg := Message{
 		ID:          id,
 		MessageType: MessageRequest,
 		Body:        *body,
-		SpanContext: scBinary,
 	}
 
 	// Queue the message.
@@ -373,7 +381,6 @@ func newResponseMessage(req *Message, body *Body) *Message {
 		ID:          req.ID,
 		MessageType: MessageResponse,
 		Body:        *body,
-		SpanContext: cbor.FixSliceForSerde(nil),
 	}
 }
 
@@ -399,21 +406,6 @@ func (c *connection) handleMessage(ctx context.Context, message *Message) {
 			)
 			_ = c.sendMessage(ctx, newResponseMessage(message, errorToBody(ErrNotReady)))
 			return
-		}
-
-		// Import runtime-provided span.
-		if len(message.SpanContext) != 0 {
-			sc, err := tracing.SpanContextFromBinary(message.SpanContext)
-			if err != nil {
-				c.logger.Error("error while unmarshalling span context",
-					"err", err,
-				)
-			} else {
-				span := opentracing.StartSpan("RHP", opentracingExt.RPCServerOption(sc))
-				defer span.Finish()
-
-				ctx = opentracing.ContextWithSpan(ctx, span)
-			}
 		}
 
 		// Call actual handler.
@@ -529,6 +521,7 @@ func (c *connection) InitHost(ctx context.Context, conn net.Conn, hi *HostInfo) 
 		ConsensusBackend:         hi.ConsensusBackend,
 		ConsensusProtocolVersion: hi.ConsensusProtocolVersion,
 		ConsensusChainContext:    hi.ConsensusChainContext,
+		LocalConfig:              hi.LocalConfig,
 	}})
 	switch {
 	default:

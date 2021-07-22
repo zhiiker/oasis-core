@@ -32,8 +32,8 @@ type RichRuntime interface {
 		rb *block.Block,
 		lb *consensus.LightBlock,
 		epoch beacon.EpochTime,
-		tx []byte,
-	) (*transaction.CheckedTransaction, error)
+		batch transaction.RawBatch,
+	) ([]protocol.CheckTxResult, error)
 
 	// Query requests the runtime to answer a runtime-specific query.
 	Query(
@@ -44,6 +44,14 @@ type RichRuntime interface {
 		method string,
 		args cbor.RawMessage,
 	) (cbor.RawMessage, error)
+
+	// QueryBatchLimits requests the runtime to answer the batch limits query.
+	QueryBatchLimits(
+		ctx context.Context,
+		rb *block.Block,
+		lb *consensus.LightBlock,
+		epoch beacon.EpochTime,
+	) (map[transaction.Weight]uint64, error)
 }
 
 type richRuntime struct {
@@ -56,8 +64,8 @@ func (r *richRuntime) CheckTx(
 	rb *block.Block,
 	lb *consensus.LightBlock,
 	epoch beacon.EpochTime,
-	tx []byte,
-) (*transaction.CheckedTransaction, error) {
+	batch transaction.RawBatch,
+) ([]protocol.CheckTxResult, error) {
 	if rb == nil || lb == nil {
 		return nil, ErrInvalidArgument
 	}
@@ -65,7 +73,7 @@ func (r *richRuntime) CheckTx(
 	resp, err := r.Call(ctx, &protocol.Body{
 		RuntimeCheckTxBatchRequest: &protocol.RuntimeCheckTxBatchRequest{
 			ConsensusBlock: *lb,
-			Inputs:         transaction.RawBatch{tx},
+			Inputs:         batch,
 			Block:          *rb,
 			Epoch:          epoch,
 		},
@@ -75,17 +83,10 @@ func (r *richRuntime) CheckTx(
 		return nil, errors.WithContext(ErrInternal, err.Error())
 	case resp.RuntimeCheckTxBatchResponse == nil:
 		return nil, errors.WithContext(ErrInternal, "malformed runtime response")
-	case len(resp.RuntimeCheckTxBatchResponse.Results) != 1:
+	case len(resp.RuntimeCheckTxBatchResponse.Results) != len(batch):
 		return nil, errors.WithContext(ErrInternal, "malformed runtime response: incorrect number of results")
 	}
-
-	// Interpret CheckTx result.
-	result := resp.RuntimeCheckTxBatchResponse.Results[0]
-	if !result.IsSuccess() {
-		return nil, errors.WithContext(ErrCheckTxFailed, result.Error.String())
-	}
-
-	return result.ToCheckedTransaction(tx), nil
+	return resp.RuntimeCheckTxBatchResponse.Results, nil
 }
 
 // Implements RichRuntime.
@@ -117,6 +118,25 @@ func (r *richRuntime) Query(
 		return nil, errors.WithContext(ErrInternal, "malformed runtime response")
 	}
 	return resp.RuntimeQueryResponse.Data, nil
+}
+
+// Implements RichRuntime.
+func (r *richRuntime) QueryBatchLimits(
+	ctx context.Context,
+	rb *block.Block,
+	lb *consensus.LightBlock,
+	epoch beacon.EpochTime,
+) (map[transaction.Weight]uint64, error) {
+	resp, err := r.Query(ctx, rb, lb, epoch, protocol.MethodQueryBatchWeightLimits, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var weightLimits map[transaction.Weight]uint64
+	if err = cbor.Unmarshal(resp, &weightLimits); err != nil {
+		return nil, errors.WithContext(ErrInternal, fmt.Sprintf("malformed runtime response: %v", err))
+	}
+	return weightLimits, nil
 }
 
 // NewRichRuntime creates a new higher-level wrapper for a given runtime. It provides additional

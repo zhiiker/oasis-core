@@ -14,6 +14,7 @@ import (
 
 	beacon "github.com/oasisprotocol/oasis-core/go/beacon/api"
 	"github.com/oasisprotocol/oasis-core/go/common"
+	"github.com/oasisprotocol/oasis-core/go/common/badger"
 	"github.com/oasisprotocol/oasis-core/go/common/crash"
 	"github.com/oasisprotocol/oasis-core/go/common/crypto/signature"
 	"github.com/oasisprotocol/oasis-core/go/common/grpc"
@@ -42,7 +43,6 @@ import (
 	"github.com/oasisprotocol/oasis-core/go/oasis-node/cmd/common/metrics"
 	"github.com/oasisprotocol/oasis-core/go/oasis-node/cmd/common/pprof"
 	cmdSigner "github.com/oasisprotocol/oasis-core/go/oasis-node/cmd/common/signer"
-	"github.com/oasisprotocol/oasis-core/go/oasis-node/cmd/common/tracing"
 	registryAPI "github.com/oasisprotocol/oasis-core/go/registry/api"
 	roothashAPI "github.com/oasisprotocol/oasis-core/go/roothash/api"
 	runtimeClient "github.com/oasisprotocol/oasis-core/go/runtime/client"
@@ -399,9 +399,6 @@ func (n *Node) initRuntimeWorkers() error {
 	n.svcMgr.Register(n.KeymanagerWorker)
 
 	// Initialize the executor worker.
-	// Keep this step _after_ initializing the storage worker,
-	// because the executor worker will use the local storage backend
-	// if it is available.
 	n.ExecutorWorker, err = executor.New(
 		dataDir,
 		n.CommonWorker,
@@ -433,6 +430,11 @@ func (n *Node) initRuntimeWorkers() error {
 }
 
 func (n *Node) startRuntimeWorkers() error {
+	// Start the common worker.
+	if err := n.CommonWorker.Start(); err != nil {
+		return err
+	}
+
 	// Start the runtime client service.
 	if err := n.RuntimeClient.Start(); err != nil {
 		return fmt.Errorf("failed to start runtime client service: %w", err)
@@ -445,11 +447,6 @@ func (n *Node) startRuntimeWorkers() error {
 
 	// Start the executor worker.
 	if err := n.ExecutorWorker.Start(); err != nil {
-		return err
-	}
-
-	// Start the common worker.
-	if err := n.CommonWorker.Start(); err != nil {
 		return err
 	}
 
@@ -652,18 +649,7 @@ func newNode(testNode bool) (node *Node, err error) { // nolint: gocyclo
 		"tls_pk", node.Identity.GetTLSSigner().Public(),
 	)
 
-	// Initialize the tracing client.
-	tracingSvc, err := tracing.New("oasis-node")
-	if err != nil {
-		logger.Error("failed to initialize tracing",
-			"err", err,
-		)
-		return nil, err
-	}
-	node.svcMgr.RegisterCleanupOnly(tracingSvc, "tracing")
-
 	// Initialize the internal gRPC server.
-	// Depends on global tracer.
 	node.grpcInternal, err = cmdGrpc.NewServerLocal(false)
 	if err != nil {
 		logger.Error("failed to initialize internal gRPC server",
@@ -790,7 +776,6 @@ func init() {
 	// Backend initialization flags.
 	for _, v := range []*flag.FlagSet{
 		metrics.Flags,
-		tracing.Flags,
 		cmdGrpc.ServerLocalFlags,
 		cmdSigner.Flags,
 		pprof.Flags,
@@ -810,6 +795,7 @@ func init() {
 		workerSentry.Flags,
 		workerConsensusRPC.Flags,
 		crash.InitFlags(),
+		badger.MigrationFlags,
 	} {
 		Flags.AddFlagSet(v)
 	}

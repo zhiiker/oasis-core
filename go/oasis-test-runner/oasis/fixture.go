@@ -154,6 +154,8 @@ type NodeFixture struct {
 	// Name is the name of the node that hosts the feature. Leave empty
 	// to automatically instantiate a dedicated node with a default name.
 	Name string `json:"node_name,omitempty"`
+
+	ExtraArgs []Argument `json:"extra_args,omitempty"`
 }
 
 // TEEFixture is a TEE configuration fixture.
@@ -208,6 +210,7 @@ func (f *ValidatorFixture) Create(net *Network) (*Validator, error) {
 			SupplementarySanityInterval: f.Consensus.SupplementarySanityInterval,
 			EnableProfiling:             f.EnableProfiling,
 			Entity:                      entity,
+			ExtraArgs:                   f.ExtraArgs,
 		},
 		Sentries: sentries,
 	})
@@ -308,6 +311,8 @@ type KeymanagerFixture struct {
 	Entity  int `json:"entity"`
 	Policy  int `json:"policy"`
 
+	RuntimeProvisioner string `json:"runtime_provisioner"`
+
 	AllowEarlyTermination bool `json:"allow_early_termination"`
 	AllowErrorTermination bool `json:"allow_error_termination"`
 
@@ -352,10 +357,12 @@ func (f *KeymanagerFixture) Create(net *Network) (*Keymanager, error) {
 			Consensus:                   f.Consensus,
 			NoAutoStart:                 f.NoAutoStart,
 			Entity:                      entity,
+			ExtraArgs:                   f.ExtraArgs,
 		},
-		Runtime:       runtime,
-		Policy:        policy,
-		SentryIndices: f.Sentries,
+		RuntimeProvisioner: f.RuntimeProvisioner,
+		Runtime:            runtime,
+		Policy:             policy,
+		SentryIndices:      f.Sentries,
 	})
 }
 
@@ -413,6 +420,7 @@ func (f *StorageWorkerFixture) Create(net *Network) (*Storage, error) {
 			LogWatcherHandlerFactories:  f.LogWatcherHandlerFactories,
 			Consensus:                   f.Consensus,
 			Entity:                      entity,
+			ExtraArgs:                   f.ExtraArgs,
 		},
 		Backend:                 f.Backend,
 		SentryIndices:           f.Sentries,
@@ -451,6 +459,9 @@ type ComputeWorkerFixture struct {
 
 	// Runtimes contains the indexes of the runtimes to enable.
 	Runtimes []int `json:"runtimes,omitempty"`
+
+	// RuntimeConfig contains the per-runtime node-local configuration.
+	RuntimeConfig map[int]map[string]interface{} `json:"runtime_config,omitempty"`
 }
 
 // Create instantiates the compute worker described by the fixture.
@@ -472,9 +483,11 @@ func (f *ComputeWorkerFixture) Create(net *Network) (*Compute, error) {
 			LogWatcherHandlerFactories:  f.LogWatcherHandlerFactories,
 			Consensus:                   f.Consensus,
 			Entity:                      entity,
+			ExtraArgs:                   f.ExtraArgs,
 		},
 		RuntimeProvisioner: f.RuntimeProvisioner,
 		Runtimes:           f.Runtimes,
+		RuntimeConfig:      f.RuntimeConfig,
 	})
 }
 
@@ -520,6 +533,7 @@ func (f *SentryFixture) Create(net *Network) (*Sentry, error) {
 			CrashPointsProbability:      f.CrashPointsProbability,
 			SupplementarySanityInterval: f.Consensus.SupplementarySanityInterval,
 			EnableProfiling:             f.EnableProfiling,
+			ExtraArgs:                   f.ExtraArgs,
 		},
 		ValidatorIndices:  f.Validators,
 		StorageIndices:    f.StorageWorkers,
@@ -542,6 +556,11 @@ type ClientFixture struct {
 	// Runtimes contains the indexes of the runtimes to enable.
 	Runtimes []int `json:"runtimes,omitempty"`
 
+	RuntimeProvisioner string `json:"runtime_provisioner"`
+
+	// RuntimeConfig contains the per-runtime node-local configuration.
+	RuntimeConfig map[int]map[string]interface{} `json:"runtime_config,omitempty"`
+
 	// MaxTransactionAge configures the MaxTransactionAge configuration of the client.
 	MaxTransactionAge int64 `json:"max_transaction_age"`
 }
@@ -556,9 +575,12 @@ func (f *ClientFixture) Create(net *Network) (*Client, error) {
 			AllowEarlyTermination:       f.AllowEarlyTermination,
 			SupplementarySanityInterval: f.Consensus.SupplementarySanityInterval,
 			EnableProfiling:             f.EnableProfiling,
+			ExtraArgs:                   f.ExtraArgs,
 		},
-		MaxTransactionAge: f.MaxTransactionAge,
-		Runtimes:          f.Runtimes,
+		MaxTransactionAge:  f.MaxTransactionAge,
+		Runtimes:           f.Runtimes,
+		RuntimeProvisioner: f.RuntimeProvisioner,
+		RuntimeConfig:      f.RuntimeConfig,
 	})
 }
 

@@ -1,18 +1,22 @@
 //! Protocol and runtime versioning.
 // NOTE: This should be kept in sync with go/common/version/version.go.
-use serde::{Deserialize, Serialize};
 
 /// A protocol or runtime version.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, cbor::Encode, cbor::Decode)]
 pub struct Version {
-    #[serde(skip_serializing_if = "num_traits::Zero::is_zero")]
-    #[serde(default)]
+    #[cbor(optional)]
+    #[cbor(default)]
+    #[cbor(skip_serializing_if = "num_traits::Zero::is_zero")]
     pub major: u16,
-    #[serde(skip_serializing_if = "num_traits::Zero::is_zero")]
-    #[serde(default)]
+
+    #[cbor(optional)]
+    #[cbor(default)]
+    #[cbor(skip_serializing_if = "num_traits::Zero::is_zero")]
     pub minor: u16,
-    #[serde(skip_serializing_if = "num_traits::Zero::is_zero")]
-    #[serde(default)]
+
+    #[cbor(optional)]
+    #[cbor(default)]
+    #[cbor(skip_serializing_if = "num_traits::Zero::is_zero")]
     pub patch: u16,
 }
 
@@ -65,7 +69,7 @@ impl From<u64> for Version {
 // and the runtime. This version MUST be compatible with the one supported by
 // the worker host.
 pub const PROTOCOL_VERSION: Version = Version {
-    major: 3,
+    major: 4,
     minor: 0,
     patch: 0,
 };

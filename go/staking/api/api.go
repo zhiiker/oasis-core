@@ -219,17 +219,28 @@ type TransferEvent struct {
 	Amount quantity.Quantity `json:"amount"`
 }
 
+// EventKind returns a string representation of this event's kind.
+func (e *TransferEvent) EventKind() string {
+	return "transfer"
+}
+
 // BurnEvent is the event emitted when stake is destroyed via a call to Burn.
 type BurnEvent struct {
 	Owner  Address           `json:"owner"`
 	Amount quantity.Quantity `json:"amount"`
 }
 
+// EventKind returns a string representation of this event's kind.
+func (e *BurnEvent) EventKind() string {
+	return "burn"
+}
+
 // EscrowEvent is an escrow event.
 type EscrowEvent struct {
-	Add     *AddEscrowEvent     `json:"add,omitempty"`
-	Take    *TakeEscrowEvent    `json:"take,omitempty"`
-	Reclaim *ReclaimEscrowEvent `json:"reclaim,omitempty"`
+	Add            *AddEscrowEvent            `json:"add,omitempty"`
+	Take           *TakeEscrowEvent           `json:"take,omitempty"`
+	DebondingStart *DebondingStartEscrowEvent `json:"debonding_start,omitempty"`
+	Reclaim        *ReclaimEscrowEvent        `json:"reclaim,omitempty"`
 }
 
 // Event signifies a staking event, returned via GetEvents.
@@ -252,11 +263,41 @@ type AddEscrowEvent struct {
 	NewShares quantity.Quantity `json:"new_shares"`
 }
 
+// EventKind returns a string representation of this event's kind.
+func (e *AddEscrowEvent) EventKind() string {
+	return "add_escrow"
+}
+
 // TakeEscrowEvent is the event emitted when stake is taken from an escrow
 // account (i.e. stake is slashed).
 type TakeEscrowEvent struct {
 	Owner  Address           `json:"owner"`
 	Amount quantity.Quantity `json:"amount"`
+}
+
+// EventKind returns a string representation of this event's kind.
+func (e *TakeEscrowEvent) EventKind() string {
+	return "take_escrow"
+}
+
+// DebondingStartEvent is the event emitted when the debonding process has
+// started and the given number of active shares have been moved into the
+// debonding pool and started debonding.
+//
+// Note that the given amount is valid at the time of debonding start and
+// may not correspond to the final debonded amount in case any escrowed
+// stake is subject to slashing.
+type DebondingStartEscrowEvent struct {
+	Owner           Address           `json:"owner"`
+	Escrow          Address           `json:"escrow"`
+	Amount          quantity.Quantity `json:"amount"`
+	ActiveShares    quantity.Quantity `json:"active_shares"`
+	DebondingShares quantity.Quantity `json:"debonding_shares"`
+}
+
+// EventKind returns a string representation of this event's kind.
+func (e *DebondingStartEscrowEvent) EventKind() string {
+	return "debonding_start"
 }
 
 // ReclaimEscrowEvent is the event emitted when stake is reclaimed from an
@@ -268,6 +309,11 @@ type ReclaimEscrowEvent struct {
 	Shares quantity.Quantity `json:"shares"`
 }
 
+// EventKind returns a string representation of this event's kind.
+func (e *ReclaimEscrowEvent) EventKind() string {
+	return "reclaim_escrow"
+}
+
 // AllowanceChangeEvent is the event emitted when allowance is changed for a beneficiary.
 type AllowanceChangeEvent struct { // nolint: maligned
 	Owner        Address           `json:"owner"`
@@ -275,6 +321,11 @@ type AllowanceChangeEvent struct { // nolint: maligned
 	Allowance    quantity.Quantity `json:"allowance"`
 	Negative     bool              `json:"negative,omitempty"`
 	AmountChange quantity.Quantity `json:"amount_change"`
+}
+
+// EventKind returns a string representation of this event's kind.
+func (e *AllowanceChangeEvent) EventKind() string {
+	return "allowance_change"
 }
 
 // Transfer is a stake transfer.

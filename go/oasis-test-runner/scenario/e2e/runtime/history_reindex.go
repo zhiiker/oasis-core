@@ -27,7 +27,7 @@ type historyReindexImpl struct {
 
 func newHistoryReindexImpl() scenario.Scenario {
 	return &historyReindexImpl{
-		runtimeImpl: *newRuntimeImpl("history-reindex", "simple-keyvalue-enc-client", nil),
+		runtimeImpl: *newRuntimeImpl("history-reindex", BasicKVEncTestClient),
 	}
 }
 
@@ -36,9 +36,6 @@ func (sc *historyReindexImpl) Fixture() (*oasis.NetworkFixture, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	// We need IAS proxy to use the registry as we are registering runtimes dynamically.
-	f.Network.IAS.UseRegistry = true
 
 	f.ComputeWorkers = []oasis.ComputeWorkerFixture{
 		{
@@ -155,14 +152,9 @@ func (sc *historyReindexImpl) Run(childEnv *env.Env) error {
 
 	// Run client to ensure runtime works.
 	sc.Logger.Info("Starting the basic client")
-	cmd, err := sc.startClient(childEnv)
-	if err != nil {
+	if err = sc.startTestClientOnly(ctx, childEnv); err != nil {
 		return err
 	}
-	clientErrCh := make(chan error)
-	go func() {
-		clientErrCh <- cmd.Wait()
-	}()
 
-	return sc.wait(childEnv, cmd, clientErrCh)
+	return sc.waitTestClient()
 }

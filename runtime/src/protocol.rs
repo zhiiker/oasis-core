@@ -1,6 +1,6 @@
 //! Runtime side of the worker-host protocol.
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     io::{BufReader, BufWriter, Read, Write},
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -12,16 +12,15 @@ use anyhow::{anyhow, Result};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use crossbeam::channel;
 use io_context::Context;
-use slog::Logger;
+use slog::{error, info, warn, Logger};
 use thiserror::Error;
 
 use crate::{
-    common::{cbor, logger::get_logger, namespace::Namespace, version::Version},
+    common::{logger::get_logger, namespace::Namespace, version::Version},
     consensus::tendermint,
     dispatcher::Dispatcher,
     rak::RAK,
     storage::KeyValue,
-    tracing,
     types::{Body, Error, Message, MessageType},
     BUILD_INFO,
 };
@@ -62,6 +61,11 @@ pub struct HostInfo {
     pub consensus_protocol_version: Version,
     /// Consensus layer chain domain separation context.
     pub consensus_chain_context: String,
+    /// Node-local runtime configuration.
+    ///
+    /// This configuration must not be used in any context which requires determinism across
+    /// replicated runtime instances.
+    pub local_config: BTreeMap<String, cbor::Value>,
 }
 
 /// Runtime part of the runtime host protocol.
@@ -157,13 +161,11 @@ impl Protocol {
     }
 
     /// Make a new request to the worker host and wait for the response.
-    pub fn make_request(&self, ctx: Context, body: Body) -> Result<Body> {
+    pub fn make_request(&self, _ctx: Context, body: Body) -> Result<Body> {
         let id = self.last_request_id.fetch_add(1, Ordering::SeqCst) as u64;
-        let span_context = tracing::get_span_context(&ctx).unwrap_or(&vec![]).clone();
         let message = Message {
             id,
             body,
-            span_context,
             message_type: MessageType::Request,
         };
 
@@ -188,7 +190,6 @@ impl Protocol {
         self.encode_message(Message {
             id,
             body,
-            span_context: vec![],
             message_type: MessageType::Response,
         })
     }
@@ -210,7 +211,7 @@ impl Protocol {
         let _guard = self.outgoing_mutex.lock().unwrap();
         let mut writer = BufWriter::new(&self.stream);
 
-        let buffer = cbor::to_vec(&message);
+        let buffer = cbor::to_vec(message);
         if buffer.len() > MAX_MESSAGE_SIZE {
             return Err(ProtocolError::MessageTooLarge.into());
         }
@@ -228,8 +229,7 @@ impl Protocol {
             MessageType::Request => {
                 // Incoming request.
                 let id = message.id;
-                let mut ctx = Context::background();
-                tracing::add_span_context(&mut ctx, message.span_context);
+                let ctx = Context::background();
 
                 let body = match self.handle_request(ctx, id, message.body) {
                     Ok(Some(result)) => result,
@@ -238,7 +238,9 @@ impl Protocol {
                         // is no need to do anything more.
                         return Ok(());
                     }
-                    Err(error) => Body::Error(Error::new("dispatcher", 1, &format!("{}", error))),
+                    Err(error) => {
+                        Body::Error(Error::new("rhp/dispatcher", 1, &format!("{}", error)))
+                    }
                 };
 
                 // Send response back.
@@ -246,7 +248,6 @@ impl Protocol {
                     id,
                     message_type: MessageType::Response,
                     body,
-                    span_context: vec![],
                 })?;
             }
             MessageType::Response => {
@@ -285,12 +286,14 @@ impl Protocol {
                 consensus_backend,
                 consensus_protocol_version,
                 consensus_chain_context,
+                local_config,
             } => {
                 info!(self.logger, "Received host environment information";
                     "runtime_id" => ?runtime_id,
                     "consensus_backend" => &consensus_backend,
                     "consensus_protocol_version" => ?consensus_protocol_version,
                     "consensus_chain_context" => &consensus_chain_context,
+                    "local_config" => ?local_config,
                 );
 
                 if tendermint::BACKEND_NAME != &consensus_backend {
@@ -309,6 +312,7 @@ impl Protocol {
                     consensus_backend,
                     consensus_protocol_version,
                     consensus_chain_context,
+                    local_config,
                 });
 
                 self.dispatcher.start(self.clone());

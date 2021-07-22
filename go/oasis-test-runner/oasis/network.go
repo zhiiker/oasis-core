@@ -78,10 +78,6 @@ type Network struct { // nolint: maligned
 
 // IASCfg is the Oasis test network IAS configuration.
 type IASCfg struct {
-	// UseRegistry specifies whether the IAS proxy should use the registry
-	// instead of the genesis document for authenticating runtime IDs.
-	UseRegistry bool `json:"use_registry,omitempty"`
-
 	// Mock specifies if Mock IAS Proxy should be used.
 	Mock bool `json:"mock,omitempty"`
 }
@@ -147,6 +143,14 @@ type NetworkCfg struct { // nolint: maligned
 // SetMockEpoch force-enables the mock epoch time keeping.
 func (cfg *NetworkCfg) SetMockEpoch() {
 	cfg.Beacon.DebugMockBackend = true
+	if cfg.Beacon.InsecureParameters != nil {
+		cfg.Beacon.InsecureParameters.Interval = defaultEpochtimeTendermintInterval
+	}
+}
+
+// SetInsecureBeacon force-enables the insecure (faster) beacon backend.
+func (cfg *NetworkCfg) SetInsecureBeacon() {
+	cfg.Beacon.Backend = beacon.BackendInsecure
 	if cfg.Beacon.InsecureParameters != nil {
 		cfg.Beacon.InsecureParameters.Interval = defaultEpochtimeTendermintInterval
 	}
@@ -298,6 +302,11 @@ func (net *Network) Controller() *Controller {
 // ClientController returns the client controller connected to the first client node.
 func (net *Network) ClientController() *Controller {
 	return net.clientController
+}
+
+// SetClientController sets the client controller.
+func (net *Network) SetClientController(ctrl *Controller) {
+	net.clientController = ctrl
 }
 
 // NumRegisterNodes returns the number of all nodes that need to register.
@@ -627,7 +636,7 @@ func (net *Network) startOasisNode(
 	}
 	args := append([]string{}, subCmd...)
 	args = append(args, baseArgs...)
-	args = append(args, extraArgs.merge()...)
+	args = append(args, extraArgs.merge(node.dir.String())...)
 
 	w, err := node.dir.NewLogWriter(logConsoleFile)
 	if err != nil {

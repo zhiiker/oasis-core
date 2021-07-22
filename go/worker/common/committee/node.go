@@ -2,6 +2,7 @@ package committee
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -83,6 +84,10 @@ type NodeHooks interface {
 	HandleNewEventLocked(*roothash.Event)
 	// Guarded by CrossNode.
 	HandleNodeUpdateLocked(*nodes.NodeUpdate, *EpochSnapshot)
+
+	// Initialized returns a channel that will be closed when the worker is initialized and ready
+	// to service requests.
+	Initialized() <-chan struct{}
 }
 
 // Node is a committee node.
@@ -124,6 +129,10 @@ func (n *Node) Name() string {
 
 // Start starts the service.
 func (n *Node) Start() error {
+	if err := n.Group.Start(); err != nil {
+		return fmt.Errorf("failed to start group services: %w", err)
+	}
+
 	go n.worker()
 	return nil
 }
@@ -353,7 +362,7 @@ func (n *Node) worker() {
 	if rt.KeyManager != nil {
 		n.logger.Info("runtime indicates a key manager is required, waiting for it to be ready")
 
-		n.KeyManagerClient, err = keymanagerClient.New(n.ctx, n.Runtime, n.KeyManager, n.Consensus.Registry(), n.Identity)
+		n.KeyManagerClient, err = keymanagerClient.New(n.ctx, n.Runtime, n.Consensus, n.Identity)
 		if err != nil {
 			n.logger.Error("failed to create key manager client",
 				"err", err,
@@ -432,8 +441,22 @@ func (n *Node) worker() {
 			// We are initialized after we have received the first block. This makes sure that any
 			// history reindexing has been completed.
 			if !initialized {
+				n.logger.Debug("common worker is initialized")
+
 				close(n.initCh)
 				initialized = true
+
+				// Wait for all child workers to initialize as well.
+				n.logger.Debug("waiting for child worker initialization")
+				for _, hooks := range n.hooks {
+					select {
+					case <-hooks.Initialized():
+					case <-n.stopCh:
+						n.logger.Info("termination requested while waiting for child worker initialization")
+						return
+					}
+				}
+				n.logger.Debug("all child workers are initialized")
 			}
 
 			// Received a block (annotated).
